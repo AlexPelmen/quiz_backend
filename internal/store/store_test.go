@@ -218,7 +218,7 @@ func TestWeightedSelection(t *testing.T) {
 		t.Fatalf("не исключён исполнитель: %v", err)
 	}
 
-	for _, table := range []string{"artists", "albums", "tracks"} {
+	for _, table := range []string{"artists", "tracks"} {
 		t.Run(table, func(t *testing.T) { assertZeroExcludes(t, pool, uow, table) })
 	}
 }

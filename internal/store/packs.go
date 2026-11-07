@@ -13,7 +13,7 @@ import (
 // PackRepository хранит пакеты и выбирает кандидатов для раундов.
 type PackRepository struct{ db DB }
 
-// Pick выбирает исполнителя, альбом и трек за три запроса.
+// Pick выбирает исполнителя и нужный для типа раунда медиаобъект.
 func (r PackRepository) Pick(ctx context.Context, excluded []uuid.UUID, filter PickFilter) (domain.Candidate, error) {
 	var c domain.Candidate
 
@@ -21,8 +21,11 @@ func (r PackRepository) Pick(ctx context.Context, excluded []uuid.UUID, filter P
 	// Экспоненциальная гонка даёт вероятность Points/sum(Points), без копирования каталога в память.
 	artist, err := one[domain.Artist](ctx, r.db, `SELECT a.* FROM artists a
 		WHERE a.points>0 AND a.status='parsed' AND NOT(a.id=ANY($1::uuid[]))
-		AND ($2='' OR $2=ANY(a.tags)) AND EXISTS(SELECT 1 FROM albums al JOIN tracks t ON t.album_id=al.id
-		WHERE al.artist_id=a.id AND t.artist_id=a.id AND al.points>0 AND t.points>0 AND `+eligible+`)
+		AND ($2='' OR $2=ANY(a.tags)) AND CASE $3
+		WHEN 'artist_by_cover' THEN EXISTS(SELECT 1 FROM albums al JOIN downloads d ON d.id=al.cover_download_id
+			WHERE al.artist_id=a.id AND al.points>0 AND d.status='finished')
+		WHEN 'artist_by_logo' THEN EXISTS(SELECT 1 FROM downloads d WHERE d.id=a.logo_download_id AND d.status='finished')
+		ELSE EXISTS(SELECT 1 FROM tracks t WHERE t.artist_id=a.id AND t.points>0 AND EXISTS(`+finishedAudio+`)) END
 		ORDER BY -ln(GREATEST(random(),1e-15))/a.points LIMIT 1`, args)
 	if err != nil {
 		return c, err
@@ -30,17 +33,17 @@ func (r PackRepository) Pick(ctx context.Context, excluded []uuid.UUID, filter P
 
 	c.Artist = artist
 
-	al, err := one[domain.Album](ctx, r.db, `SELECT al.* FROM albums al JOIN artists a ON a.id=al.artist_id
-		WHERE al.artist_id=$1 AND al.points>0 AND EXISTS(SELECT 1 FROM tracks t
-		WHERE t.album_id=al.id AND t.artist_id=a.id AND t.points>0 AND `+eligibleAlbum+`)
-		ORDER BY -ln(GREATEST(random(),1e-15))/al.points LIMIT 1`, []any{artist.ID, filter.Kind})
-	if err != nil {
+	switch filter.Kind {
+	case "artist_by_cover":
+		c.Album, err = one[domain.Album](ctx, r.db, `SELECT al.* FROM albums al JOIN downloads d ON d.id=al.cover_download_id
+			WHERE al.artist_id=$1 AND al.points>0 AND d.status='finished'
+			ORDER BY -ln(GREATEST(random(),1e-15))/al.points LIMIT 1`, []any{artist.ID})
 		return c, err
+	case "artist_by_logo":
+		return c, nil
+	default:
+		return r.pickTrack(ctx, c)
 	}
-
-	c.Album = al
-
-	return r.pickTrack(ctx, c, filter.Kind)
 }
 
 // PickFilter задаёт тип раунда и необязательный тег исполнителя.
@@ -49,35 +52,20 @@ type PickFilter struct {
 	Tag  string
 }
 
-const eligible = `CASE $3 WHEN 'artist_by_cover' THEN
-	EXISTS(SELECT 1 FROM downloads d WHERE d.id=al.cover_download_id AND d.status='finished')
-	WHEN 'artist_by_logo' THEN
-	EXISTS(SELECT 1 FROM downloads d WHERE d.id=a.logo_download_id AND d.status='finished')
-	ELSE EXISTS(SELECT 1 FROM track_to_download td JOIN downloads d ON d.id=td.download_id
+const finishedAudio = `SELECT d FROM track_to_download td JOIN downloads d ON d.id=td.download_id
 	WHERE td.track_id=t.id AND d.status='finished' AND d.file_type='mp3'
-	AND (d.meta->>'duration_seconds')::double precision>0) END`
+	AND (d.meta->>'duration_seconds')::double precision>0`
 
-const eligibleAlbum = `CASE $2 WHEN 'artist_by_cover' THEN
-	EXISTS(SELECT 1 FROM downloads d WHERE d.id=al.cover_download_id AND d.status='finished')
-	WHEN 'artist_by_logo' THEN
-	EXISTS(SELECT 1 FROM downloads d WHERE d.id=a.logo_download_id AND d.status='finished')
-	ELSE EXISTS(SELECT 1 FROM track_to_download td JOIN downloads d ON d.id=td.download_id
-	WHERE td.track_id=t.id AND d.status='finished' AND d.file_type='mp3'
-	AND (d.meta->>'duration_seconds')::double precision>0) END`
-
-func (r PackRepository) pickTrack(ctx context.Context, c domain.Candidate, kind string) (domain.Candidate, error) {
-	err := r.db.QueryRow(ctx, `SELECT to_jsonb(t),sound.data FROM tracks t
-		LEFT JOIN LATERAL (SELECT to_jsonb(d) AS data FROM downloads d
-		JOIN track_to_download td ON td.download_id=d.id WHERE td.track_id=t.id
-		AND d.status='finished' AND d.file_type='mp3'
-		AND (d.meta->>'duration_seconds')::double precision>0
+func (r PackRepository) pickTrack(ctx context.Context, c domain.Candidate) (domain.Candidate, error) {
+	err := r.db.QueryRow(ctx, `SELECT to_jsonb(t),COALESCE(to_jsonb(al),'{}'::jsonb),to_jsonb(sound.d) FROM tracks t
+		LEFT JOIN albums al ON al.id=t.album_id
+		JOIN LATERAL (`+finishedAudio+`
 		ORDER BY (d.source_type='upload') DESC,
 			CASE WHEN d.source_type='upload' THEN d.created_at END DESC,
 			CASE WHEN d.source_type='upload' THEN d.id END DESC,d.created_at,d.id LIMIT 1) sound ON true
-		WHERE t.album_id=$1 AND t.artist_id=$2 AND t.points>0
-		AND ($3 IN ('artist_by_cover','artist_by_logo') OR sound.data IS NOT NULL)
+		WHERE t.artist_id=$1 AND t.points>0
 		ORDER BY -ln(GREATEST(random(),1e-15))/t.points LIMIT 1`,
-		c.Album.ID, c.Artist.ID, kind).Scan(&c.Track, &c.Sound)
+		c.Artist.ID).Scan(&c.Track, &c.Album, &c.Sound)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return c, domain.ErrNotFound
 	}
@@ -109,11 +97,11 @@ func (r PackRepository) Create(ctx context.Context, p domain.QuizPack) error {
 }
 
 func (r PackRepository) createQuestion(ctx context.Context, q domain.Question) error {
-	return execute(ctx, r.db, `INSERT INTO quiz_questions(id,round_id,number,artist_id,track_id,
+	return execute(ctx, r.db, `INSERT INTO quiz_questions(id,round_id,number,artist_id,track_id,album_id,
 		primary_text,secondary_text,image_download_id,sound_download_id,track_start_sec,track_finish_sec,answer,answer_info)
-		VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)`, []any{
+		VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)`, []any{
 		q.ID, q.RoundID, q.Number,
-		q.ArtistID, q.TrackID, q.PrimaryText, q.SecondaryText, q.ImageDownloadID, q.SoundDownloadID,
+		q.ArtistID, q.TrackID, q.AlbumID, q.PrimaryText, q.SecondaryText, q.ImageDownloadID, q.SoundDownloadID,
 		q.TrackStartSec, q.TrackFinishSec, q.Answer, q.AnswerInfo,
 	})
 }
@@ -131,7 +119,7 @@ func (r PackRepository) Get(ctx context.Context, id uuid.UUID) (domain.QuizPack,
 		return p, err
 	}
 
-	p.Rounds, err = query[domain.Round](ctx, r.db,
+	p.Rounds, err = query[domain.QuizRound](ctx, r.db,
 		"SELECT * FROM quiz_rounds WHERE pack_id=$1 ORDER BY number", []any{id})
 	if err != nil {
 		return p, err

@@ -24,14 +24,14 @@ func TestClipBounds(t *testing.T) {
 
 func TestParseTrackLimit(t *testing.T) {
 	for _, tc := range []struct {
-		points int
+		points float64
 		k      float64
 		want   int
 	}{
-		{100, 0.1, 10}, {50, 0.1, 5}, {1, 0.1, 1}, {0, 0.1, 0}, {100, 0, 0},
+		{100, 0.1, 10}, {50, 0.1, 5}, {19.99, 0.1, 1}, {1, 0.1, 1}, {0, 0.1, 0}, {100, 0, 0},
 	} {
 		if got := ParseTrackLimit(tc.k, tc.points); got != tc.want {
-			t.Fatalf("k=%v points=%d: got %d, want %d", tc.k, tc.points, got, tc.want)
+			t.Fatalf("k=%v points=%v: got %d, want %d", tc.k, tc.points, got, tc.want)
 		}
 	}
 }
@@ -39,6 +39,30 @@ func TestParseTrackLimit(t *testing.T) {
 func TestVowelHint(t *testing.T) {
 	if got := vowelHint("Ёлка — Hello, мир!"); got != "Ё__а — _e__o, _и_!" {
 		t.Fatalf("неожиданная подсказка: %q", got)
+	}
+}
+
+func TestRoundScore(t *testing.T) {
+	for _, tc := range []struct {
+		name          string
+		score         roundScore
+		current, want float64
+	}{
+		{"correct in a difficult round", roundScore{true, 0.2, 20}, 50, 58},
+		{"incorrect in an easy round", roundScore{false, 0.8, 20}, 50, 42},
+		{"nothing guessed", roundScore{false, 0, 20}, 50, 50},
+		{"everything guessed", roundScore{true, 1, 20}, 50, 50},
+		{"disabled", roundScore{true, 0.2, 0}, 50, 50},
+		{"rounding near zero", roundScore{false, 0.99, 100}, 0.01, 0.01},
+		{"rounding near one hundred", roundScore{true, 0.01, 100}, 99.99, 99.99},
+		{"wrong answer cannot raise a manual score", roundScore{false, 0.9, 20}, 0.001, 0.001},
+		{"correct answer cannot lower a manual score", roundScore{true, 0.1, 20}, 99.999, 99.999},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := tc.score.points(tc.current, 1); got != tc.want {
+				t.Fatalf("points = %v, want %v", got, tc.want)
+			}
+		})
 	}
 }
 

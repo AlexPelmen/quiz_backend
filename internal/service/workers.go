@@ -233,12 +233,12 @@ func (a *App) parseArtist(ctx context.Context, artist domain.Artist, deps parseD
 }
 
 // ParseTrackLimit вычисляет число импортируемых треков на исполнителя.
-func ParseTrackLimit(k float64, points int) int {
+func ParseTrackLimit(k, points float64) int {
 	if k <= 0 || points <= 0 {
 		return 0
 	}
 
-	return max(1, int(math.Floor(k*float64(points))))
+	return max(1, int(math.Floor(k*points)))
 }
 
 type catalogInput struct {

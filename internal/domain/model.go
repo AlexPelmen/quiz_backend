@@ -26,7 +26,8 @@ type Artist struct {
 	LogoDownloadID *uuid.UUID `json:"logo_download_id"`
 	Tags           []string   `json:"tags"`
 	Artists        []string   `json:"artists"`
-	Points         int        `json:"points"`
+	Points         float64    `json:"points"`
+	GuessNum       int        `json:"guess_num"`
 	GeniusID       *int64     `json:"genius_id"`
 	MusicBrainzID  string     `json:"musicbrainz_id"`
 	ManualFields   []string   `json:"manual_fields"`
@@ -51,7 +52,8 @@ type Album struct {
 	CoverDownloadID   *uuid.UUID `json:"cover_download_id"`
 	ReleaseDate       string     `json:"release_date"`
 	ArtistID          uuid.UUID  `json:"artist_id"`
-	Points            int        `json:"points"`
+	Points            float64    `json:"points"`
+	GuessNum          int        `json:"guess_num"`
 	GeniusID          *int64     `json:"genius_id"`
 	TrackList         string     `json:"track_list"`
 	TrackListComplete bool       `json:"track_list_complete"`
@@ -66,7 +68,8 @@ type Track struct {
 	Name      string     `json:"name"`
 	ArtistID  uuid.UUID  `json:"artist_id"`
 	AlbumID   *uuid.UUID `json:"album_id"`
-	Points    int        `json:"points"`
+	Points    float64    `json:"points"`
+	GuessNum  int        `json:"guess_num"`
 	GeniusID  *int64     `json:"genius_id"`
 	CreatedAt time.Time  `json:"created_at"`
 	UpdatedAt time.Time  `json:"updated_at"`
@@ -109,17 +112,17 @@ type ParseRun struct {
 
 // QuizPack объединяет упорядоченные раунды.
 type QuizPack struct {
-	ID          uuid.UUID `json:"id"`
-	Name        string    `json:"name"`
-	Description string    `json:"description"`
-	Tags        []string  `json:"tags"`
-	CreatedAt   time.Time `json:"created_at"`
-	UpdatedAt   time.Time `json:"updated_at"`
-	Rounds      []Round   `json:"rounds,omitempty" db:"-"`
+	ID          uuid.UUID   `json:"id"`
+	Name        string      `json:"name"`
+	Description string      `json:"description"`
+	Tags        []string    `json:"tags"`
+	CreatedAt   time.Time   `json:"created_at"`
+	UpdatedAt   time.Time   `json:"updated_at"`
+	Rounds      []QuizRound `json:"rounds,omitempty" db:"-"`
 }
 
-// Round содержит ровно десять вопросов одного типа.
-type Round struct {
+// QuizRound содержит ровно десять вопросов одного типа.
+type QuizRound struct {
 	ID        uuid.UUID  `json:"id"`
 	PackID    uuid.UUID  `json:"pack_id"`
 	Number    int        `json:"number"`
@@ -133,7 +136,8 @@ type Question struct {
 	RoundID         uuid.UUID      `json:"round_id"`
 	Number          int            `json:"number"`
 	ArtistID        uuid.UUID      `json:"artist_id"`
-	TrackID         uuid.UUID      `json:"track_id"`
+	TrackID         *uuid.UUID     `json:"track_id"`
+	AlbumID         *uuid.UUID     `json:"album_id"`
 	PrimaryText     string         `json:"primary_text"`
 	SecondaryText   string         `json:"secondary_text"`
 	ImageDownloadID *uuid.UUID     `json:"image_download_id"`

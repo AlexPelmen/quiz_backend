@@ -58,6 +58,7 @@ func Router(app *service.App, logger *slog.Logger) *gin.Engine {
 	v1.POST("/downloads/:id/retry", h.retryDownload)
 	v1.GET("/downloads/:id/file", h.file)
 	v1.GET("/quiz-packs/:id/questions/:number/audio", h.audio)
+	v1.POST("/quiz-rounds/:id/results", h.recordRoundResult)
 	v1.GET("/settings", h.settings)
 	v1.PATCH("/settings", h.patchSettings)
 	v1.GET("/genius-quota", h.geniusQuota)
@@ -319,6 +320,27 @@ func (a *api) savePack(c *gin.Context, id *uuid.UUID) {
 
 	value, err := a.app.Generate(c.Request.Context(), f)
 	a.respond(c, value, err)
+}
+
+func (a *api) recordRoundResult(c *gin.Context) {
+	id, err := requestID(c)
+	if err != nil {
+		a.respond(c, nil, err)
+		return
+	}
+
+	var f service.RoundResultForm
+	if err := decode(c, &f); err != nil {
+		a.respond(c, nil, err)
+		return
+	}
+
+	if err := a.app.RecordRoundResult(c.Request.Context(), *id, f); err != nil {
+		a.respond(c, nil, err)
+		return
+	}
+
+	c.Status(http.StatusNoContent)
 }
 
 func (a *api) remove(resource string) gin.HandlerFunc {

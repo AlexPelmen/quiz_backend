@@ -159,7 +159,7 @@
                     }
                   },
                   "points": {
-                    "type": "integer",
+                    "type": "number",
                     "minimum": 0,
                     "maximum": 100,
                     "default": 100
@@ -327,7 +327,7 @@
                     }
                   },
                   "points": {
-                    "type": "integer",
+                    "type": "number",
                     "minimum": 0,
                     "maximum": 100,
                     "default": 100
@@ -592,7 +592,7 @@
                     "format": "uuid"
                   },
                   "points": {
-                    "type": "integer",
+                    "type": "number",
                     "minimum": 0,
                     "maximum": 100,
                     "default": 100
@@ -746,7 +746,7 @@
                     "maxLength": 1000
                   },
                   "points": {
-                    "type": "integer",
+                    "type": "number",
                     "minimum": 0,
                     "maximum": 100,
                     "default": 100
@@ -1022,7 +1022,7 @@
                     "format": "uuid"
                   },
                   "points": {
-                    "type": "integer",
+                    "type": "number",
                     "minimum": 0,
                     "maximum": 100,
                     "default": 100
@@ -1173,7 +1173,7 @@
                     "maxLength": 1000
                   },
                   "points": {
-                    "type": "integer",
+                    "type": "number",
                     "minimum": 0,
                     "maximum": 100,
                     "default": 100
@@ -2463,6 +2463,122 @@
         }
       }
     },
+    "/api/v1/quiz-rounds/{id}/results": {
+      "post": {
+        "summary": "Сохранить результат завершённого раунда",
+        "description": "Повтор с тем же attempt_id и теми же ответами не меняет известность второй раз.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "attempt_id",
+                  "r",
+                  "n",
+                  "answers"
+                ],
+                "additionalProperties": false,
+                "properties": {
+                  "attempt_id": {
+                    "type": "string",
+                    "format": "uuid"
+                  },
+                  "r": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 10
+                  },
+                  "n": {
+                    "type": "integer",
+                    "const": 10
+                  },
+                  "answers": {
+                    "type": "object",
+                    "propertyNames": {
+                      "type": "string",
+                      "format": "uuid"
+                    },
+                    "additionalProperties": {
+                      "type": "boolean"
+                    },
+                    "minProperties": 10,
+                    "maxProperties": 10
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "204": {
+            "description": "Результат раунда сохранён"
+          },
+          "400": {
+            "description": "Некорректный результат раунда",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Раунд не найден",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Для этой попытки уже сохранены другие ответы",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Внутренняя ошибка сервиса",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "504": {
+            "description": "Превышено время ожидания",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/health": {
       "get": {
         "summary": "Процесс запущен",
@@ -2940,10 +3056,15 @@
             }
           },
           "points": {
-            "type": "integer",
+            "type": "number",
             "minimum": 0,
             "maximum": 100,
             "default": 100
+          },
+          "guess_num": {
+            "type": "integer",
+            "minimum": 0,
+            "readOnly": true
           },
           "genius_id": {
             "anyOf": [
@@ -3007,10 +3128,15 @@
             "type": "string"
           },
           "points": {
-            "type": "integer",
+            "type": "number",
             "minimum": 0,
             "maximum": 100,
             "default": 100
+          },
+          "guess_num": {
+            "type": "integer",
+            "minimum": 0,
+            "readOnly": true
           },
           "genius_id": {
             "anyOf": [
@@ -3066,10 +3192,15 @@
             ]
           },
           "points": {
-            "type": "integer",
+            "type": "number",
             "minimum": 0,
             "maximum": 100,
             "default": 100
+          },
+          "guess_num": {
+            "type": "integer",
+            "minimum": 0,
+            "readOnly": true
           },
           "genius_id": {
             "anyOf": [
@@ -3220,8 +3351,26 @@
             "format": "uuid"
           },
           "track_id": {
-            "type": "string",
-            "format": "uuid"
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "album_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "primary_text": {
             "type": "string"
@@ -3294,7 +3443,7 @@
         },
         "additionalProperties": false
       },
-      "Round": {
+      "QuizRound": {
         "type": "object",
         "properties": {
           "id": {
@@ -3344,7 +3493,7 @@
           "rounds": {
             "type": "array",
             "items": {
-              "$ref": "#/components/schemas/Round"
+              "$ref": "#/components/schemas/QuizRound"
             }
           },
           "created_at": {
@@ -3373,7 +3522,7 @@
             }
           },
           "points": {
-            "type": "integer",
+            "type": "number",
             "minimum": 0,
             "maximum": 100,
             "default": 100
@@ -3414,7 +3563,7 @@
             "format": "uuid"
           },
           "points": {
-            "type": "integer",
+            "type": "number",
             "minimum": 0,
             "maximum": 100,
             "default": 100
@@ -3442,7 +3591,7 @@
             "format": "uuid"
           },
           "points": {
-            "type": "integer",
+            "type": "number",
             "minimum": 0,
             "maximum": 100,
             "default": 100
@@ -3518,6 +3667,12 @@
             "minimum": 0,
             "maximum": 100,
             "default": 0.1
+          },
+          "k_popularity": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 100,
+            "default": 20
           },
           "poll_seconds": {
             "type": "integer",

@@ -106,7 +106,7 @@ type ArtistForm struct {
 	Status   *string   `json:"status"`
 	Name     *string   `json:"name"`
 	Tags     *[]string `json:"tags"`
-	Points   *int      `json:"points"`
+	Points   *float64  `json:"points"`
 	FullName *string   `json:"full_name"`
 	Country  *string   `json:"country"`
 	Artists  *[]string `json:"artists"`
@@ -211,7 +211,7 @@ func applyArtist(r *domain.Artist, f ArtistForm) {
 // CatalogForm задаёт поля создания или обновления альбома и трека.
 type CatalogForm struct {
 	Name        *string    `json:"name"`
-	Points      *int       `json:"points"`
+	Points      *float64   `json:"points"`
 	ArtistID    *uuid.UUID `json:"artist_id"`
 	AlbumID     *uuid.UUID `json:"album_id"`
 	ReleaseDate *string    `json:"release_date"`
@@ -316,7 +316,7 @@ func (a *App) SaveTrack(ctx context.Context, id *uuid.UUID, f CatalogForm) (doma
 	return result, err
 }
 
-func applyNamePoints(name *string, points *int, f CatalogForm) {
+func applyNamePoints(name *string, points *float64, f CatalogForm) {
 	if f.Name != nil {
 		*name = strings.TrimSpace(*f.Name)
 	}
@@ -326,7 +326,7 @@ func applyNamePoints(name *string, points *int, f CatalogForm) {
 	}
 }
 
-func validateNamePoints(name string, points int) error {
+func validateNamePoints(name string, points float64) error {
 	if name == "" || utf8.RuneCountInString(name) > 1000 || points < 0 || points > 100 {
 		return fmt.Errorf("%w: требуется название до 1000 символов и points от 0 до 100", domain.ErrInvalid)
 	}

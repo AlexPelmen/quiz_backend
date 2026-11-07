@@ -80,8 +80,8 @@ type roundInput struct {
 	Pack domain.QuizPack
 }
 
-func buildRound(ctx context.Context, tx *store.UnitOfWork, in roundInput) (domain.Round, error) {
-	r := domain.Round{ID: uuid.New(), PackID: in.Pack.ID, Number: len(in.Pack.Rounds) + 1, Type: in.Kind}
+func buildRound(ctx context.Context, tx *store.UnitOfWork, in roundInput) (domain.QuizRound, error) {
+	r := domain.QuizRound{ID: uuid.New(), PackID: in.Pack.ID, Number: len(in.Pack.Rounds) + 1, Type: in.Kind}
 
 	used := append([]uuid.UUID{}, in.Used...)
 	for i := range 10 {
@@ -96,7 +96,6 @@ func buildRound(ctx context.Context, tx *store.UnitOfWork, in roundInput) (domai
 		}
 
 		q.ID, q.RoundID, q.Number = uuid.New(), r.ID, (r.Number-1)*10+i+1
-		q.ArtistID, q.TrackID = c.Artist.ID, c.Track.ID
 		r.Questions = append(r.Questions, q)
 		used = append(used, c.Artist.ID)
 	}
@@ -121,7 +120,13 @@ func makeQuestion(kind string, c domain.Candidate) (domain.Question, error) {
 	}
 
 	q := builder(c)
+	q.ArtistID = c.Artist.ID
 	q.AnswerInfo = map[string]any{"artist": c.Artist.Name, "track": c.Track.Name, "album": c.Album.Name}
+
+	if kind == "artist_by_cover" {
+		q.AlbumID = &c.Album.ID
+	}
+
 	if kind == "artist_by_cover" || kind == "artist_by_logo" {
 		return q, nil
 	}
@@ -136,6 +141,7 @@ func makeQuestion(kind string, c domain.Candidate) (domain.Question, error) {
 	}
 
 	start, finish := ClipBounds(duration, rand.Float64())
+	q.TrackID = &c.Track.ID
 	q.SoundDownloadID, q.TrackStartSec, q.TrackFinishSec = &c.Sound.ID, &start, &finish
 
 	return q, nil
