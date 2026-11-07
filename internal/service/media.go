@@ -24,6 +24,8 @@ import (
 // Media выполняет ограниченные по времени операции над локальными записями.
 type Media struct{}
 
+var errInvalidMP3 = errors.New("не удалось прочитать MP3 с положительной длительностью")
+
 func runCommand(ctx context.Context, executable string, args []string) ([]byte, error) {
 	cmd := exec.CommandContext(ctx, executable, args...)
 	// Утилиты запускаются напрямую, без shell: аргументы не интерпретируются как команды.
@@ -46,7 +48,8 @@ func runCommand(ctx context.Context, executable string, args []string) ([]byte, 
 
 func probe(ctx context.Context, executable, path string) (float64, error) {
 	output, err := runCommand(ctx, executable, []string{
-		"-v", "error", "-show_entries", "format=duration", "-of", "json", path,
+		"-v", "error", "-f", "mp3", "-protocol_whitelist", "file",
+		"-select_streams", "a:0", "-show_entries", "format=duration:stream=codec_name", "-of", "json", path,
 	})
 	if err != nil {
 		return 0, err
@@ -56,15 +59,22 @@ func probe(ctx context.Context, executable, path string) (float64, error) {
 		Format struct {
 			Duration string `json:"duration"`
 		} `json:"format"`
+		Streams []struct {
+			CodecName string `json:"codec_name"`
+		} `json:"streams"`
 	}
 
 	if err := json.Unmarshal(output, &result); err != nil {
 		return 0, err
 	}
 
+	if len(result.Streams) == 0 || result.Streams[0].CodecName != "mp3" {
+		return 0, errInvalidMP3
+	}
+
 	duration, err := strconv.ParseFloat(result.Format.Duration, 64)
 	if err != nil || duration <= 0 || math.IsNaN(duration) || math.IsInf(duration, 0) {
-		return 0, errors.New("не удалось определить положительную длительность аудио")
+		return 0, errInvalidMP3
 	}
 
 	return duration, nil

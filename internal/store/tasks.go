@@ -92,6 +92,12 @@ func (r DownloadRepository) Create(ctx context.Context, d domain.Download) (doma
 		[]any{d.ID, d.SourceType, d.SourceURI, d.FileType, d.Meta})
 }
 
+// SaveUpload регистрирует проверенный локальный файл как завершённую загрузку.
+func (r DownloadRepository) SaveUpload(ctx context.Context, d domain.Download) (domain.Download, error) {
+	return one[domain.Download](ctx, r.db, `INSERT INTO downloads(id,source_type,uri,status,file_type,meta)
+		VALUES($1,'upload',$2,'finished',$3,$4) RETURNING *`, []any{d.ID, d.URI, d.FileType, d.Meta})
+}
+
 // Link связывает трек с записью или задачей ручного поиска.
 func (r DownloadRepository) Link(ctx context.Context, trackID, downloadID uuid.UUID) error {
 	_, err := r.db.Exec(ctx, `INSERT INTO track_to_download VALUES($1,$2) ON CONFLICT DO NOTHING`,
@@ -109,7 +115,8 @@ func (r DownloadRepository) List(ctx context.Context, p domain.Page) ([]domain.D
 	return query[domain.Download](ctx, r.db, `SELECT d.* FROM downloads d
 		WHERE ($3='' OR d.status=$3) AND ($4::uuid IS NULL OR EXISTS(
 		SELECT 1 FROM track_to_download td WHERE td.download_id=d.id AND td.track_id=$4))
-		ORDER BY d.created_at DESC,d.id DESC LIMIT $1 OFFSET $2`, []any{p.Limit, p.Offset, p.Status, p.TrackID})
+		ORDER BY ($4::uuid IS NOT NULL AND d.source_type='upload') DESC,d.created_at DESC,d.id DESC
+		LIMIT $1 OFFSET $2`, []any{p.Limit, p.Offset, p.Status, p.TrackID})
 }
 
 // Claim атомарно захватывает задачу; истёкший захват позволяет восстановить работу.

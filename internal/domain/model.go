@@ -55,6 +55,7 @@ type Album struct {
 	GeniusID          *int64     `json:"genius_id"`
 	TrackList         string     `json:"track_list"`
 	TrackListComplete bool       `json:"track_list_complete"`
+	ManualReleaseDate bool       `json:"-"`
 	CreatedAt         time.Time  `json:"created_at"`
 	UpdatedAt         time.Time  `json:"updated_at"`
 }
@@ -69,6 +70,12 @@ type Track struct {
 	GeniusID  *int64     `json:"genius_id"`
 	CreatedAt time.Time  `json:"created_at"`
 	UpdatedAt time.Time  `json:"updated_at"`
+}
+
+// TrackWithStatus дополняет трек состоянием его аудиозаписей.
+type TrackWithStatus struct {
+	Track
+	Status string `json:"status"`
 }
 
 // Download описывает источник и результат загрузки. URI назначается только сервером.
@@ -156,4 +163,7 @@ type Page struct {
 	TrackID  *uuid.UUID
 	Status   string
 	Tag      string
+	Name     string
+	Sort     string
+	Order    string
 }

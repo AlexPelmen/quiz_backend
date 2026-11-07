@@ -70,7 +70,10 @@ func (r PackRepository) pickTrack(ctx context.Context, c domain.Candidate, kind 
 		LEFT JOIN LATERAL (SELECT to_jsonb(d) AS data FROM downloads d
 		JOIN track_to_download td ON td.download_id=d.id WHERE td.track_id=t.id
 		AND d.status='finished' AND d.file_type='mp3'
-		AND (d.meta->>'duration_seconds')::double precision>0 ORDER BY d.created_at,d.id LIMIT 1) sound ON true
+		AND (d.meta->>'duration_seconds')::double precision>0
+		ORDER BY (d.source_type='upload') DESC,
+			CASE WHEN d.source_type='upload' THEN d.created_at END DESC,
+			CASE WHEN d.source_type='upload' THEN d.id END DESC,d.created_at,d.id LIMIT 1) sound ON true
 		WHERE t.album_id=$1 AND t.artist_id=$2 AND t.points>0
 		AND ($3 IN ('artist_by_cover','artist_by_logo') OR sound.data IS NOT NULL)
 		ORDER BY -ln(GREATEST(random(),1e-15))/t.points LIMIT 1`,

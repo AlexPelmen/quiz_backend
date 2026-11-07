@@ -73,7 +73,7 @@ func (a *App) readOne(ctx context.Context, resource string, id uuid.UUID) (any, 
 	case "albums":
 		return a.uow.Albums.Get(ctx, id)
 	case "tracks":
-		return a.uow.Tracks.Get(ctx, id)
+		return a.uow.Tracks.GetWithStatus(ctx, id)
 	case "downloads":
 		return a.uow.Downloads.Get(ctx, id)
 	case "parsing-runs":
@@ -243,6 +243,7 @@ func (a *App) SaveAlbum(ctx context.Context, id *uuid.UUID, f CatalogForm) (doma
 
 		if f.ReleaseDate != nil {
 			r.ReleaseDate = *f.ReleaseDate
+			r.ManualReleaseDate = true
 		}
 
 		if err := validateNamePoints(r.Name, r.Points); err != nil {

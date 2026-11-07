@@ -157,7 +157,7 @@ func query[T any](ctx context.Context, db DB, sql string, args []any) ([]T, erro
 		r = []T{}
 	}
 
-	return r, err
+	return r, translate(err)
 }
 
 func one[T any](ctx context.Context, db DB, sql string, args []any) (T, error) {

@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -49,6 +50,9 @@ func Router(app *service.App, logger *slog.Logger) *gin.Engine {
 		v1.DELETE("/"+resource+"/:id", h.remove(resource))
 	}
 
+	v1.POST("/artists/:id/image", h.upload("artists"))
+	v1.POST("/albums/:id/cover", h.upload("albums"))
+	v1.POST("/tracks/:id/audio", h.upload("tracks"))
 	v1.POST("/artists/:id/retry", h.retryArtist)
 	v1.POST("/parsing-runs", h.startParsing)
 	v1.POST("/downloads/:id/retry", h.retryDownload)
@@ -170,7 +174,56 @@ func (a *api) read(resource string) gin.HandlerFunc {
 			return
 		}
 
+		if id == nil {
+			p.Name = strings.TrimSpace(c.Query("name"))
+			p.Sort, p.Order = c.Query("sort"), c.Query("order")
+
+			if !validCatalogSort(resource, p) {
+				a.respond(c, nil, fmt.Errorf("%w: недопустимая сортировка", domain.ErrInvalid))
+				return
+			}
+		}
+
 		value, err := a.app.Read(c.Request.Context(), service.ReadRequest{Resource: resource, ID: id, Page: p})
+		a.respond(c, value, err)
+	}
+}
+
+func validCatalogSort(resource string, p domain.Page) bool {
+	if resource != "artists" && resource != "albums" && resource != "tracks" {
+		return true
+	}
+
+	if p.Order != "" && p.Order != "asc" && p.Order != "desc" {
+		return false
+	}
+
+	switch p.Sort {
+	case "", "name", "points", "created_at":
+		return true
+	case "status":
+		return resource == "artists" || resource == "tracks"
+	case "release_date":
+		return resource == "albums"
+	default:
+		return false
+	}
+}
+
+func (a *api) upload(resource string) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		id, err := requestID(c)
+		if err != nil {
+			a.respond(c, nil, err)
+			return
+		}
+
+		if c.ContentType() != "application/octet-stream" {
+			c.JSON(http.StatusUnsupportedMediaType, gin.H{"error": "Требуется application/octet-stream"})
+			return
+		}
+
+		value, err := a.app.Upload(c.Request.Context(), resource, *id, c.Request.Body)
 		a.respond(c, value, err)
 	}
 }

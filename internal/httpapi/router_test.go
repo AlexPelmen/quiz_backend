@@ -41,6 +41,8 @@ func TestHTTPWorkflow(t *testing.T) {
 		t.Fatal("не назначена оценка по умолчанию")
 	}
 
+	call("POST", "/api/v1/artists", `{"name":"ТЕСТ"}`, 409)
+
 	url := "/api/v1/artists/" + artist.ID.String()
 	call("PATCH", url, `{"points":0,"country":"RU"}`, 200)
 	call("PATCH", url, `{"status":"manual"}`, 200)
