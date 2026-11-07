@@ -17,8 +17,8 @@ type PackRepository struct{ db DB }
 func (r PackRepository) Pick(ctx context.Context, excluded []uuid.UUID, filter PickFilter) (domain.Candidate, error) {
 	var c domain.Candidate
 
-	args := []any{excluded, filter.Tag, filter.Kind}
-	// Экспоненциальная гонка даёт вероятность Points/sum(Points), без копирования каталога в память.
+	args := []any{excluded, filter.Tag, filter.Kind, filter.Center}
+	// Экспоненциальная гонка выбирает кандидата пропорционально весу его известности.
 	artist, err := one[domain.Artist](ctx, r.db, `SELECT a.* FROM artists a
 		WHERE a.points>0 AND a.status='parsed' AND NOT(a.id=ANY($1::uuid[]))
 		AND ($2='' OR $2=ANY(a.tags)) AND CASE $3
@@ -29,7 +29,7 @@ func (r PackRepository) Pick(ctx context.Context, excluded []uuid.UUID, filter P
 			WHERE al.artist_id=a.id AND al.points>0 AND strpos(lower(al.name),lower(a.name))=0)>=2
 		ELSE EXISTS(SELECT 1 FROM tracks t WHERE t.artist_id=a.id AND t.points>0
 			AND ($3<>'track_vowels' OR quiz_title_has_consonant(t.name)) AND EXISTS(`+finishedAudio+`)) END
-		ORDER BY -ln(GREATEST(random(),1e-15))/a.points LIMIT 1`, args)
+		ORDER BY -ln(GREATEST(random(),1e-15))/quiz_popularity_weight(a.points,$4) LIMIT 1`, args)
 	if err != nil {
 		return c, err
 	}
@@ -40,35 +40,41 @@ func (r PackRepository) Pick(ctx context.Context, excluded []uuid.UUID, filter P
 	case "artist_by_cover":
 		c.Album, err = one[domain.Album](ctx, r.db, `SELECT al.* FROM albums al `+approvedCover+`
 			WHERE al.artist_id=$1 AND al.points>0
-			ORDER BY -ln(GREATEST(random(),1e-15))/al.points LIMIT 1`, []any{artist.ID})
+			ORDER BY -ln(GREATEST(random(),1e-15))/quiz_popularity_weight(al.points,$2) LIMIT 1`,
+			[]any{artist.ID, filter.Center})
 
 		return c, err
 	case "artist_by_logo":
 		return c, nil
 	case "artist_by_albums":
 		err = r.db.QueryRow(ctx, `SELECT ARRAY(SELECT name FROM (
-			SELECT DISTINCT name FROM albums WHERE artist_id=$1 AND points>0 AND strpos(lower(name),lower($2))=0
-		) names ORDER BY random() LIMIT 3)`, artist.ID, artist.Name).Scan(&c.AlbumNames)
+			SELECT name, max(points) AS popularity FROM albums
+			WHERE artist_id=$1 AND points>0 AND strpos(lower(name),lower($2))=0 GROUP BY name
+		) names ORDER BY popularity DESC, name LIMIT 10)`, artist.ID, artist.Name).Scan(&c.AlbumNames)
 
 		return c, err
 	default:
-		return r.PickTrack(ctx, c, filter.Kind)
+		return r.PickTrack(ctx, c, filter)
 	}
 }
 
 // AudioArtists возвращает доступных исполнителей с готовым звуком в порядке взвешенной выборки.
-func (r PackRepository) AudioArtists(ctx context.Context, excluded []uuid.UUID, tag string) ([]domain.Artist, error) {
+func (r PackRepository) AudioArtists(
+	ctx context.Context, excluded []uuid.UUID, filter PickFilter,
+) ([]domain.Artist, error) {
 	return query[domain.Artist](ctx, r.db, `SELECT a.* FROM artists a
 		WHERE a.points>0 AND a.status='parsed' AND NOT(a.id=ANY($1::uuid[]))
 		AND ($2='' OR $2=ANY(a.tags)) AND EXISTS(SELECT 1 FROM tracks t
 			WHERE t.artist_id=a.id AND t.points>0 AND EXISTS(`+finishedAudio+`))
-		ORDER BY -ln(GREATEST(random(),1e-15))/a.points`, []any{excluded, tag})
+		ORDER BY -ln(GREATEST(random(),1e-15))/quiz_popularity_weight(a.points,$3)`,
+		[]any{excluded, filter.Tag, filter.Center})
 }
 
-// PickFilter задаёт тип раунда и необязательный тег исполнителя.
+// PickFilter задаёт тип раунда, тег и центр распределения известности.
 type PickFilter struct {
-	Kind string
-	Tag  string
+	Kind   string
+	Tag    string
+	Center float64
 }
 
 const finishedAudio = `SELECT d FROM track_to_download td JOIN downloads d ON d.id=td.download_id
@@ -76,7 +82,9 @@ const finishedAudio = `SELECT d FROM track_to_download td JOIN downloads d ON d.
 	AND (d.meta->>'duration_seconds')::double precision>0`
 
 // PickTrack выбирает готовый трек для заданного исполнителя.
-func (r PackRepository) PickTrack(ctx context.Context, c domain.Candidate, kind string) (domain.Candidate, error) {
+func (r PackRepository) PickTrack(
+	ctx context.Context, c domain.Candidate, filter PickFilter,
+) (domain.Candidate, error) {
 	err := r.db.QueryRow(ctx, `SELECT to_jsonb(t),COALESCE(to_jsonb(al),'{}'::jsonb),to_jsonb(sound.d) FROM tracks t
 		LEFT JOIN albums al ON al.id=t.album_id
 		JOIN LATERAL (`+finishedAudio+`
@@ -84,8 +92,8 @@ func (r PackRepository) PickTrack(ctx context.Context, c domain.Candidate, kind 
 			CASE WHEN d.source_type='upload' THEN d.created_at END DESC,
 			CASE WHEN d.source_type='upload' THEN d.id END DESC,d.created_at,d.id LIMIT 1) sound ON true
 		WHERE t.artist_id=$1 AND t.points>0 AND ($2<>'track_vowels' OR quiz_title_has_consonant(t.name))
-		ORDER BY -ln(GREATEST(random(),1e-15))/t.points LIMIT 1`,
-		c.Artist.ID, kind).Scan(&c.Track, &c.Album, &c.Sound)
+		ORDER BY -ln(GREATEST(random(),1e-15))/quiz_popularity_weight(t.points,$3) LIMIT 1`,
+		c.Artist.ID, filter.Kind, filter.Center).Scan(&c.Track, &c.Album, &c.Sound)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return c, domain.ErrNotFound
 	}

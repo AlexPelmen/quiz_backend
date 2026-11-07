@@ -10,7 +10,6 @@ import (
 	"regexp"
 	"strings"
 	"unicode"
-	"unicode/utf8"
 
 	"github.com/google/uuid"
 
@@ -160,6 +159,19 @@ type roundInput struct {
 	Pack domain.QuizPack
 }
 
+func (in roundInput) pickFilter() store.PickFilter {
+	center := 50.0
+
+	switch in.Pack.Difficulty {
+	case "easy":
+		center = 80
+	case "hard":
+		center = 20
+	}
+
+	return store.PickFilter{Kind: in.Kind, Tag: in.Tag, Center: center}
+}
+
 func buildRound(ctx context.Context, tx *store.UnitOfWork, in roundInput) (domain.QuizRound, error) {
 	r := domain.QuizRound{ID: uuid.New(), PackID: in.Pack.ID, Number: len(in.Pack.Rounds) + 1, Type: in.Kind}
 
@@ -168,9 +180,10 @@ func buildRound(ctx context.Context, tx *store.UnitOfWork, in roundInput) (domai
 		return buildSequenceRound(ctx, tx.Packs, in, r)
 	}
 
+	filter := in.pickFilter()
 	used := append([]uuid.UUID{}, in.Used...)
 	for i := range roundSize {
-		c, err := tx.Packs.Pick(ctx, used, store.PickFilter{Kind: in.Kind, Tag: in.Tag})
+		c, err := tx.Packs.Pick(ctx, used, filter)
 		if err != nil {
 			return r, err
 		}
@@ -302,13 +315,9 @@ func artistByLogo(c domain.Candidate) domain.Question {
 }
 
 func artistInitial(c domain.Candidate) domain.Question {
-	name := strings.TrimSpace(c.Artist.Name)
-	parts := strings.Fields(name)
-	if len(parts) > 1 && strings.EqualFold(parts[0], "the") {
-		name = parts[1]
+	return domain.Question{
+		PrimaryText: "Назовите исполнителя", SecondaryText: initialHint(c.Artist.Name), Answer: c.Artist.Name,
 	}
-	letter, _ := utf8.DecodeRuneInString(name)
-	return domain.Question{PrimaryText: "Назовите исполнителя", SecondaryText: string(letter), Answer: c.Artist.Name}
 }
 
 // PackPatch задаёт частичное изменение описания пакета.

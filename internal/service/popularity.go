@@ -54,8 +54,11 @@ func (a *App) RecordRoundResult(ctx context.Context, id uuid.UUID, f RoundResult
 		slices.SortFunc(questions, func(a, b domain.Question) int { return bytes.Compare(a.ArtistID[:], b.ArtistID[:]) })
 
 		rate := float64(*f.Correct) / float64(f.Total)
+		score := roundScore{rate: rate, k: s.KPopularity, minDelta: s.MinPopularityDelta}
+
 		for _, q := range questions {
-			if err := scoreQuestion(ctx, tx.Packs, q, roundScore{*f.Answers[q.ID], rate, s.KPopularity}); err != nil {
+			score.correct = *f.Answers[q.ID]
+			if err := scoreQuestion(ctx, tx.Packs, q, score); err != nil {
 				return fmt.Errorf("вопрос %s: %w", q.ID, err)
 			}
 		}
@@ -93,9 +96,10 @@ func verifyAnswers(questions []domain.Question, f RoundResultForm) ([]bool, erro
 }
 
 type roundScore struct {
-	correct bool
-	rate    float64
-	k       float64
+	correct  bool
+	rate     float64
+	k        float64
+	minDelta float64
 }
 
 func scoreQuestion(ctx context.Context, packs store.PackRepository, q domain.Question, score roundScore) error {
@@ -129,7 +133,8 @@ func (s roundScore) points(current, weight float64) float64 {
 	}
 
 	// Автооценка не должна попадать в граничные значения из-за округления.
-	next := min(99.99, max(0.01, math.Round((current+delta*weight)*100)/100))
+	delta = math.Copysign(max(s.minDelta, math.Abs(delta)*weight), delta)
+	next := min(99.99, max(0.01, math.Round((current+delta)*100)/100))
 	if delta > 0 {
 		return max(current, next)
 	}

@@ -107,14 +107,15 @@ func assertRoundPopularity(t *testing.T, pool *pgxpool.Pool, router http.Handler
 	assertQuestionPopularity(t, pool, expectedPopularity{round.Type, first, 46, 1})
 	assertQuestionPopularity(t, pool, expectedPopularity{round.Type, last, 36, 1})
 
-	call("PATCH", "/api/v1/settings", `{"k_popularity":10}`, 200)
+	call("PATCH", "/api/v1/settings", `{"min_popularity_delta":-1}`, 400)
+	call("PATCH", "/api/v1/settings", `{"k_popularity":10,"min_popularity_delta":2}`, 200)
 
 	payload.AttemptID = uuid.New()
 
 	post(204)
-	assertQuestionPopularity(t, pool, expectedPopularity{round.Type, first, 47.59, 2})
-	assertQuestionPopularity(t, pool, expectedPopularity{round.Type, last, 34.94, 2})
-	call("PATCH", "/api/v1/settings", `{"k_popularity":20}`, 200)
+	assertQuestionPopularity(t, pool, expectedPopularity{round.Type, first, 48, 2})
+	assertQuestionPopularity(t, pool, expectedPopularity{round.Type, last, 34, 2})
+	call("PATCH", "/api/v1/settings", `{"k_popularity":20,"min_popularity_delta":1}`, 200)
 }
 
 type expectedPopularity struct {

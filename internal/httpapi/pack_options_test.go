@@ -39,8 +39,8 @@ func TestPackRoundOptions(t *testing.T) {
 		}
 	}
 
-	if _, err := pool.Exec(t.Context(), `INSERT INTO albums(id,name,artist_id)
-		SELECT gen_random_uuid(),'Другой альбом',id FROM artists`); err != nil {
+	if _, err := pool.Exec(t.Context(), `INSERT INTO albums(id,name,artist_id,points)
+		SELECT gen_random_uuid(),'Релиз ' || n,id,n FROM artists CROSS JOIN generate_series(1,12) AS n`); err != nil {
 		t.Fatal(err)
 	}
 
@@ -78,11 +78,20 @@ func checkSelectedRound(t *testing.T, pack domain.QuizPack, kind string) {
 
 	for i, q := range pack.Rounds[0].Questions {
 		if kind == "artist_by_albums" {
-			if len(strings.Split(q.SecondaryText, "\n")) != 2 || q.SoundDownloadID != nil {
+			want := []string{"Альбом"}
+			for n := 12; n >= 4; n-- {
+				want = append(want, fmt.Sprintf("Релиз %d", n))
+			}
+
+			if q.SecondaryText != strings.Join(want, "\n") || q.SoundDownloadID != nil {
 				t.Fatalf("неверная подсказка по альбомам: %q", q.SecondaryText)
 			}
 
 			continue
+		}
+
+		if (kind == "artist_cities" || kind == "artist_alphabet") && q.SecondaryText != "" {
+			t.Fatalf("лишняя подсказка в раунде %s: %q", kind, q.SecondaryText)
 		}
 
 		name := domain.TransliterateRussian(strings.ToLower(q.Answer))

@@ -6,6 +6,7 @@ import (
 	"slices"
 	"strings"
 	"unicode"
+	"unicode/utf8"
 
 	"github.com/google/uuid"
 	"golang.org/x/text/unicode/norm"
@@ -26,7 +27,8 @@ type sequenceArtist struct {
 func buildSequenceRound(
 	ctx context.Context, packs store.PackRepository, in roundInput, round domain.QuizRound,
 ) (domain.QuizRound, error) {
-	artists, err := packs.AudioArtists(ctx, in.Used, in.Tag)
+	filter := in.pickFilter()
+	artists, err := packs.AudioArtists(ctx, in.Used, filter)
 	if err != nil {
 		return round, err
 	}
@@ -42,7 +44,7 @@ func buildSequenceRound(
 	}
 
 	for i, item := range sequence {
-		c, err := packs.PickTrack(ctx, domain.Candidate{Artist: item.artist}, in.Kind)
+		c, err := packs.PickTrack(ctx, domain.Candidate{Artist: item.artist}, filter)
 		if err != nil {
 			return round, err
 		}
@@ -52,7 +54,6 @@ func buildSequenceRound(
 			return round, err
 		}
 
-		q.SecondaryText = fmt.Sprintf("Первая буква: %c", unicode.ToUpper(rune(item.first)))
 		if in.Kind == "artist_growth" {
 			q.SecondaryText = fmt.Sprintf("Букв в названии: %d", item.length)
 		}
@@ -65,7 +66,7 @@ func buildSequenceRound(
 
 func sequenceName(artist domain.Artist) sequenceArtist {
 	item := sequenceArtist{artist: artist}
-	name := norm.NFD.String(domain.TransliterateRussian(strings.ToLower(norm.NFC.String(artist.Name))))
+	name := latinArtistName(artist.Name)
 
 	for _, r := range artist.Name {
 		if unicode.IsLetter(r) {
@@ -86,6 +87,68 @@ func sequenceName(artist domain.Artist) sequenceArtist {
 	}
 
 	return item
+}
+
+func withoutArticle(name string) string {
+	parts := strings.Fields(name)
+	if len(parts) > 1 {
+		switch strings.ToLower(parts[0]) {
+		case "the", "a", "an":
+			return strings.Join(parts[1:], " ")
+		}
+	}
+
+	return strings.TrimSpace(name)
+}
+
+func latinArtistName(name string) string {
+	return norm.NFD.String(domain.TransliterateRussian(strings.ToLower(norm.NFC.String(name))))
+}
+
+func initialHint(name string) string {
+	const latin = "abcdefghijklmnopqrstuvwxyz"
+
+	russian := [...]string{
+		"А", "Б", "К", "Д", "Е", "Ф", "Г", "Х", "И", "Дж", "К", "Л", "М",
+		"Н", "О", "П", "К", "Р", "С", "Т", "У", "В", "В", "Кс", "Й", "З",
+	}
+
+	for _, letter := range norm.NFC.String(withoutArticle(name)) {
+		if !unicode.IsLetter(letter) {
+			continue
+		}
+
+		original := string(unicode.ToUpper(letter))
+		lower := string(unicode.ToLower(letter))
+		transliterated := domain.TransliterateRussian(lower)
+
+		if transliterated != lower && transliterated != "" {
+			return strings.ToUpper(transliterated[:1]) + transliterated[1:] + "/" + original
+		}
+
+		base, _ := utf8.DecodeRuneInString(latinArtistName(lower))
+		if i := strings.IndexRune(latin, base); i >= 0 {
+			return string(unicode.ToUpper(base)) + "/" + russian[i]
+		}
+
+		return original
+	}
+
+	return ""
+}
+
+func cityName(artist domain.Artist) sequenceArtist {
+	name := latinArtistName(withoutArticle(artist.Name))
+	// Знаки оформления пропускаем, цифры на краях оставляем, чтобы не подменять их буквами.
+	trimmed := strings.TrimFunc(name, func(r rune) bool { return !unicode.IsLetter(r) && !unicode.IsDigit(r) })
+	first, _ := utf8.DecodeRuneInString(trimmed)
+	last, _ := utf8.DecodeLastRuneInString(trimmed)
+
+	if first < 'a' || first > 'z' || last < 'a' || last > 'z' {
+		return sequenceArtist{}
+	}
+
+	return sequenceArtist{artist: artist, first: byte(first), last: byte(last)}
 }
 
 func pickSequence(ctx context.Context, kind string, artists []domain.Artist) []sequenceArtist {
@@ -129,7 +192,7 @@ func citySequence(ctx context.Context, artists []domain.Artist) []sequenceArtist
 	starts := []byte{}
 
 	for _, artist := range artists {
-		item := sequenceName(artist)
+		item := cityName(artist)
 		if item.first == 0 {
 			continue
 		}

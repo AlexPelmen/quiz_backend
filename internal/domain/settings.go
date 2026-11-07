@@ -10,6 +10,7 @@ import (
 type Settings struct {
 	KParse                   float64  `json:"k_parse"`
 	KPopularity              float64  `json:"k_popularity"`
+	MinPopularityDelta       float64  `json:"min_popularity_delta"`
 	PollSeconds              int      `json:"poll_seconds"`
 	HTTPTimeoutSeconds       int      `json:"http_timeout_seconds"`
 	TaskTimeoutSeconds       int      `json:"task_timeout_seconds"`
@@ -35,7 +36,7 @@ type Settings struct {
 // DefaultSettings задаёт рабочие значения для нового экземпляра.
 func DefaultSettings() Settings {
 	return Settings{
-		KParse: 0.1, KPopularity: 20, PollSeconds: 2, HTTPTimeoutSeconds: 30,
+		KParse: 0.1, KPopularity: 20, MinPopularityDelta: 1, PollSeconds: 2, HTTPTimeoutSeconds: 30,
 		TaskTimeoutSeconds: 600, DownloadWorkers: 2, MaxDownloadBytes: 100 << 20,
 		StorageDir: "data", FFmpeg: "ffmpeg", FFprobe: "ffprobe", YTDLP: "yt-dlp", YTDLPJSRuntime: "node",
 		GeniusURL: "https://api.genius.com", GeniusWebURL: "https://genius.com/api",
@@ -59,6 +60,7 @@ func (s Settings) Validate() error {
 	}
 
 	if s.KParse < 0 || s.KParse > 100 || math.IsNaN(s.KPopularity) || s.KPopularity < 0 || s.KPopularity > 100 ||
+		math.IsNaN(s.MinPopularityDelta) || s.MinPopularityDelta < 0 || s.MinPopularityDelta > 100 ||
 		s.PollSeconds < 1 || s.HTTPTimeoutSeconds < 1 ||
 		s.TaskTimeoutSeconds < s.HTTPTimeoutSeconds || s.TaskTimeoutSeconds > 86400 ||
 		s.DownloadWorkers < 1 || s.DownloadWorkers > 16 || s.MaxDownloadBytes < 1024 {

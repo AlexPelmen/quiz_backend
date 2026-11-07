@@ -1786,6 +1786,7 @@
                   },
                   "difficulty": {
                     "type": "string",
+                    "description": "Центр отбора по известности: easy — 80, medium — 50, hard — 20. Стандартное отклонение — 15.",
                     "enum": [
                       "easy",
                       "medium",
@@ -4144,6 +4145,13 @@
             "minimum": 0,
             "maximum": 100,
             "default": 20
+          },
+          "min_popularity_delta": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 100,
+            "default": 1,
+            "description": "Минимальный модуль ненулевой дельты после затухания. 0 отключает минимум."
           },
           "poll_seconds": {
             "type": "integer",
