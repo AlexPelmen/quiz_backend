@@ -3432,6 +3432,73 @@
           }
         }
       }
+    },
+    "/api/v1/parsing-runs/{id}/stop": {
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string",
+            "format": "uuid"
+          }
+        }
+      ],
+      "post": {
+        "summary": "Stop parsing after current artist",
+        "responses": {
+          "200": {
+            "description": "Updated parsing run",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ParseRun"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid ID"
+          },
+          "404": {
+            "description": "Active run not found"
+          },
+          "500": {
+            "description": "Internal error"
+          }
+        }
+      }
+    },
+    "/api/v1/downloads/retry-youtube": {
+      "post": {
+        "summary": "Retry failed YouTube downloads",
+        "responses": {
+          "201": {
+            "description": "Number queued",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "queued"
+                  ],
+                  "properties": {
+                    "queued": {
+                      "type": "integer",
+                      "format": "int64",
+                      "minimum": 0
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal error"
+          }
+        }
+      }
     }
   },
   "components": {
@@ -3756,6 +3823,8 @@
             "enum": [
               "pending",
               "running",
+              "stopping",
+              "stopped",
               "finished",
               "errored"
             ]

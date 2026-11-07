@@ -54,22 +54,29 @@ func (r RunRepository) List(ctx context.Context, p domain.Page) ([]domain.ParseR
 
 // Claim захватывает очередь или восстанавливает просроченный запуск.
 func (r RunRepository) Claim(ctx context.Context, seconds int) (domain.ParseRun, error) {
-	return one[domain.ParseRun](ctx, r.db, `UPDATE parse_runs SET status='running',
+	return one[domain.ParseRun](ctx, r.db, `UPDATE parse_runs SET status=CASE WHEN status='stopping' THEN status ELSE 'running' END,
 		lease_until=now()+make_interval(secs=>$1),updated_at=now() WHERE id=(
-		SELECT id FROM parse_runs WHERE status='pending' OR (status='running' AND lease_until<now())
+		SELECT id FROM parse_runs WHERE status='pending' OR (status IN ('running','stopping') AND lease_until<now())
 		ORDER BY created_at FOR UPDATE SKIP LOCKED LIMIT 1) RETURNING *`, []any{seconds})
 }
 
 // Renew продлевает захват между исполнителями и обновляет счётчики.
-func (r RunRepository) Renew(ctx context.Context, run domain.ParseRun, seconds int) error {
-	return execute(ctx, r.db, `UPDATE parse_runs SET processed=$2,failed=$3,
-		lease_until=now()+make_interval(secs=>$4),updated_at=now() WHERE id=$1`,
+func (r RunRepository) Renew(ctx context.Context, run domain.ParseRun, seconds int) (domain.ParseRun, error) {
+	return one[domain.ParseRun](ctx, r.db, `UPDATE parse_runs SET processed=$2,failed=$3,
+		lease_until=now()+make_interval(secs=>$4),updated_at=now() WHERE id=$1 RETURNING *`,
 		[]any{run.ID, run.Processed, run.Failed, seconds})
+}
+
+// Stop запрашивает остановку после текущего исполнителя.
+func (r RunRepository) Stop(ctx context.Context, id uuid.UUID) (domain.ParseRun, error) {
+	return one[domain.ParseRun](ctx, r.db, `UPDATE parse_runs SET status=CASE
+		WHEN status='pending' THEN 'stopped' ELSE 'stopping' END, updated_at=now()
+		WHERE id=$1 AND status IN ('pending','running','stopping') RETURNING *`, []any{id})
 }
 
 // Finish завершает запуск и освобождает его захват.
 func (r RunRepository) Finish(ctx context.Context, run domain.ParseRun) error {
-	return execute(ctx, r.db, `UPDATE parse_runs SET status=$2,processed=$3,failed=$4,
+	return execute(ctx, r.db, `UPDATE parse_runs SET status=CASE WHEN status='stopping' THEN 'stopped' ELSE $2 END,processed=$3,failed=$4,
 		error=$5,lease_until=NULL,updated_at=now() WHERE id=$1`,
 		[]any{run.ID, run.Status, run.Processed, run.Failed, run.Error})
 }
@@ -141,4 +148,14 @@ func (r DownloadRepository) Retry(ctx context.Context, d domain.Download) (domai
 	return one[domain.Download](ctx, r.db, `UPDATE downloads SET source_type=$2,source_uri=$3,
 		status='pending',attempts=0,error='',next_attempt_at=now(),updated_at=now()
 		WHERE id=$1 AND status IN ('errored','manual') RETURNING *`, []any{d.ID, d.SourceType, d.SourceURI})
+}
+
+// RetryYouTube возвращает ошибочные загрузки YouTube в очередь.
+func (r DownloadRepository) RetryYouTube(ctx context.Context) (int64, error) {
+	result, err := r.db.Exec(ctx, `UPDATE downloads SET status='pending',attempts=0,error='',
+		next_attempt_at=now(),lease_until=NULL,updated_at=now() WHERE status='errored' AND source_type='youtube'`)
+	if err != nil {
+		return 0, translate(err)
+	}
+	return result.RowsAffected(), nil
 }

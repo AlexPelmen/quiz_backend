@@ -66,6 +66,18 @@ func (r ArtistRepository) Retry(ctx context.Context, id uuid.UUID) error {
 		WHERE id=$1 AND status IN ('errored','parsed')`, []any{id})
 }
 
+// Release возвращает незавершённую обработку исполнителя в очередь.
+func (r ArtistRepository) Release(ctx context.Context, id uuid.UUID) error {
+	return execute(ctx, r.db, `UPDATE artists SET status='created',lease_until=NULL,updated_at=now()
+		WHERE id=$1 AND status='processing'`, []any{id})
+}
+
+// Renew продлевает захват исполнителя во время ожидания повтора.
+func (r ArtistRepository) Renew(ctx context.Context, id uuid.UUID, seconds int) error {
+	return execute(ctx, r.db, `UPDATE artists SET lease_until=now()+make_interval(secs=>$2)
+		WHERE id=$1 AND status='processing'`, []any{id, seconds})
+}
+
 // Claim атомарно захватывает следующего исполнителя на ограниченный срок.
 func (r ArtistRepository) Claim(ctx context.Context, seconds int, startedAt time.Time) (domain.Artist, error) {
 	return one[domain.Artist](ctx, r.db, `UPDATE artists SET status='processing',

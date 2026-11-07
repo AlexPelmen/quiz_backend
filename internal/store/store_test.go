@@ -15,6 +15,31 @@ import (
 	"devkeeper.com/quiz/internal/testutil"
 )
 
+func TestRetryYouTubeOnlyErrors(t *testing.T) {
+	pool, uow := testutil.Database(t)
+	ctx := t.Context()
+	ids := []uuid.UUID{uuid.New(), uuid.New(), uuid.New(), uuid.New()}
+	_, err := pool.Exec(ctx, `INSERT INTO downloads(id,source_type,status,file_type,attempts,error) VALUES
+		($1,'youtube','errored','mp3',3,'failure'),($2,'youtube','finished','mp3',1,''),
+		($3,'image','errored','image',3,'failure'),($4,'youtube','manual','mp3',0,'')`, ids[0], ids[1], ids[2], ids[3])
+	if err != nil {
+		t.Fatal(err)
+	}
+	count, err := uow.Downloads.RetryYouTube(ctx)
+	if err != nil || count != 1 {
+		t.Fatalf("повторено %d, ошибка %v", count, err)
+	}
+	for i, want := range []string{"pending", "finished", "errored", "manual"} {
+		d, err := uow.Downloads.Get(ctx, ids[i])
+		if err != nil || d.Status != want {
+			t.Fatalf("загрузка %d: %+v, %v", i, d, err)
+		}
+		if i == 0 && (d.Attempts != 0 || d.Error != "") {
+			t.Fatalf("ошибка и попытки не сброшены: %+v", d)
+		}
+	}
+}
+
 func TestQuotaKeepsNewestObservation(t *testing.T) {
 	_, uow := testutil.Database(t)
 	ctx := t.Context()

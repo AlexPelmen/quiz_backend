@@ -386,6 +386,11 @@ func (a *App) StartParsing(ctx context.Context) (domain.ParseRun, error) {
 	return a.uow.Runs.Create(ctx)
 }
 
+// StopParsing запрашивает остановку после текущего исполнителя.
+func (a *App) StopParsing(ctx context.Context, id uuid.UUID) (domain.ParseRun, error) {
+	return a.uow.Runs.Stop(ctx, id)
+}
+
 // RetryArtist разрешает повторную обработку при следующем запуске парсинга.
 func (a *App) RetryArtist(ctx context.Context, id uuid.UUID) error {
 	return a.uow.Artists.Retry(ctx, id)

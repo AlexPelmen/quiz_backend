@@ -259,6 +259,9 @@ func (g *Genius) Catalog(ctx context.Context, lookup Lookup) (Catalog, error) {
 
 	for i := range c.Albums {
 		if err := g.albumDetails(ctx, &c.Albums[i]); err != nil {
+			if errors.Is(err, context.DeadlineExceeded) {
+				return c, err
+			}
 			c.Warnings = append(c.Warnings, fmt.Sprintf("альбом %d: %v", c.Albums[i].ID, err))
 		}
 	}

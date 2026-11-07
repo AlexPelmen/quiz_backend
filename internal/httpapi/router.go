@@ -64,7 +64,9 @@ func Router(app *service.App, logger *slog.Logger) *gin.Engine {
 	v1.POST("/tracks/:id/audio", h.upload("tracks"))
 	v1.POST("/artists/:id/retry", h.retryArtist)
 	v1.POST("/parsing-runs", h.startParsing)
+	v1.POST("/parsing-runs/:id/stop", h.stopParsing)
 	v1.POST("/downloads/:id/retry", h.retryDownload)
+	v1.POST("/downloads/retry-youtube", h.retryYouTubeDownloads)
 	v1.GET("/downloads/:id/file", h.file)
 	v1.GET("/quiz-packs/:id/questions/:number/audio", h.audio)
 	v1.POST("/quiz-rounds/:id/results", h.recordRoundResult)
@@ -392,6 +394,16 @@ func (a *api) startParsing(c *gin.Context) {
 	c.JSON(http.StatusAccepted, value)
 }
 
+func (a *api) stopParsing(c *gin.Context) {
+	id, err := requestID(c)
+	if err != nil {
+		a.respond(c, nil, err)
+		return
+	}
+	value, err := a.app.StopParsing(c.Request.Context(), *id)
+	a.respond(c, value, err)
+}
+
 func (a *api) retryArtist(c *gin.Context) {
 	id, err := requestID(c)
 	if err == nil {
@@ -404,6 +416,11 @@ func (a *api) retryArtist(c *gin.Context) {
 	}
 
 	c.Status(http.StatusNoContent)
+}
+
+func (a *api) retryYouTubeDownloads(c *gin.Context) {
+	count, err := a.app.RetryYouTubeDownloads(c.Request.Context())
+	a.respond(c, gin.H{"queued": count}, err)
 }
 
 func (a *api) retryDownload(c *gin.Context) {

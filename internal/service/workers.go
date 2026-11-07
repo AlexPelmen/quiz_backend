@@ -158,8 +158,12 @@ type parseDependencies struct {
 
 func (a *App) processRun(ctx context.Context, run *domain.ParseRun, deps parseDependencies) error {
 	for {
-		if err := a.uow.Runs.Renew(ctx, *run, deps.Settings.TaskTimeoutSeconds+30); err != nil {
+		current, err := a.uow.Runs.Renew(ctx, *run, deps.Settings.TaskTimeoutSeconds+30)
+		if err != nil {
 			return err
+		}
+		if current.Status == "stopping" {
+			return nil
 		}
 
 		artist, err := a.uow.Artists.Claim(ctx, deps.Settings.TaskTimeoutSeconds+30, run.CreatedAt)
@@ -171,10 +175,16 @@ func (a *App) processRun(ctx context.Context, run *domain.ParseRun, deps parseDe
 			return err
 		}
 
-		err = a.parseArtist(ctx, artist, deps)
+		err = a.parseArtistWithRetry(ctx, run, artist, deps, 3*time.Minute)
 
 		if ctx.Err() != nil {
 			return ctx.Err()
+		}
+		if errors.Is(err, errParsingStopped) {
+			return a.uow.Artists.Release(ctx, artist.ID)
+		}
+		if errors.Is(err, context.DeadlineExceeded) {
+			return errors.Join(err, a.uow.Artists.Release(ctx, artist.ID))
 		}
 
 		var apiErr *source.HTTPError
@@ -204,6 +214,44 @@ func (a *App) processRun(ctx context.Context, run *domain.ParseRun, deps parseDe
 	}
 }
 
+var errParsingStopped = errors.New("парсинг остановлен")
+
+func (a *App) parseArtistWithRetry(ctx context.Context, run *domain.ParseRun, artist domain.Artist, deps parseDependencies, delay time.Duration) error {
+	for attempt := 0; ; attempt++ {
+		err := a.parseArtist(ctx, artist, deps)
+		if !errors.Is(err, context.DeadlineExceeded) || ctx.Err() != nil || attempt == 3 {
+			return err
+		}
+		a.log.Warn("тайм-аут парсинга, ожидаем повтор", "artist_id", artist.ID, "retry", attempt+1, "wait", delay, "error", err)
+		if err := a.waitParseRetry(ctx, run, artist.ID, deps.Settings, delay); err != nil {
+			return err
+		}
+	}
+}
+
+func (a *App) waitParseRetry(ctx context.Context, run *domain.ParseRun, artistID uuid.UUID, s domain.Settings, delay time.Duration) error {
+	deadline := time.Now().Add(delay)
+	for {
+		current, err := a.uow.Runs.Renew(ctx, *run, s.TaskTimeoutSeconds+30)
+		if err != nil {
+			return err
+		}
+		if current.Status == "stopping" {
+			return errParsingStopped
+		}
+		if err := a.uow.Artists.Renew(ctx, artistID, s.TaskTimeoutSeconds+30); err != nil {
+			return err
+		}
+		remaining := time.Until(deadline)
+		if remaining <= 0 {
+			return nil
+		}
+		if !wait(ctx, min(remaining, 2*time.Second)) {
+			return ctx.Err()
+		}
+	}
+}
+
 func (a *App) parseArtist(ctx context.Context, artist domain.Artist, deps parseDependencies) error {
 	ctx, cancel := context.WithTimeout(ctx, time.Duration(deps.Settings.TaskTimeoutSeconds)*time.Second)
 	defer cancel()
@@ -217,6 +265,9 @@ func (a *App) parseArtist(ctx context.Context, artist domain.Artist, deps parseD
 
 	artist.GeniusID, artist.FullName, artist.Artists = &c.ArtistID, c.Name, []string{}
 	enrichment, enrichErr := deps.Enrichment.Enrich(ctx, artist.Name)
+	if errors.Is(enrichErr, context.DeadlineExceeded) {
+		return enrichErr
+	}
 
 	if enrichErr == nil {
 		artist.Country, artist.MusicBrainzID = enrichment.Country, enrichment.ID

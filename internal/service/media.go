@@ -124,7 +124,7 @@ func fetchFile(ctx context.Context, s domain.Settings, address, path string) (re
 	return nil
 }
 
-func downloadYouTube(ctx context.Context, s domain.Settings, d domain.Download, path string) error {
+func downloadYouTube(ctx context.Context, s domain.Settings, d domain.Download, path string) (result error) {
 	u, err := url.Parse(d.SourceURI)
 	if err != nil || u.Scheme != "https" || u.User != nil {
 		return fmt.Errorf("%w: требуется HTTPS-ссылка YouTube", domain.ErrInvalid)
@@ -135,14 +135,39 @@ func downloadYouTube(ctx context.Context, s domain.Settings, d domain.Download, 
 		return fmt.Errorf("%w: неподдерживаемый хост YouTube", domain.ErrInvalid)
 	}
 
-	_, err = runCommand(ctx, s.YTDLP, []string{
+	args := []string{
 		"--ignore-config", "--js-runtimes", s.YTDLPJSRuntime,
 		"--no-playlist", "--no-progress", "--no-warnings", "--no-part", "--no-mtime",
 		"--max-filesize", strconv.FormatInt(s.MaxDownloadBytes, 10),
-		"--format", "bestaudio/best", "--output", path, "--", d.SourceURI,
-	})
+		"--format", "bestaudio/best", "--output", path,
+	}
+	if cookiePath := os.Getenv("YTDLP_COOKIES_FILE"); cookiePath != "" {
+		input, openErr := os.Open(cookiePath)
+		if openErr != nil {
+			return fmt.Errorf("открыть cookies yt-dlp: %w", openErr)
+		}
+		defer func() { result = errors.Join(result, input.Close()) }()
+		copyFile, createErr := os.CreateTemp(filepath.Dir(path), ".cookies-*")
+		if createErr != nil {
+			return fmt.Errorf("создать временные cookies yt-dlp: %w", createErr)
+		}
+		if _, copyErr := io.Copy(copyFile, input); copyErr != nil {
+			return errors.Join(fmt.Errorf("скопировать cookies yt-dlp: %w", copyErr), copyFile.Close())
+		}
+		if closeErr := copyFile.Close(); closeErr != nil {
+			return closeErr
+		}
+		args = append(args, "--cookies", copyFile.Name())
+	}
+	args = append(args, "--", d.SourceURI)
+	_, err = runCommand(ctx, s.YTDLP, args)
 
 	return err
+}
+
+// RetryYouTubeDownloads возвращает ошибочные загрузки YouTube в очередь.
+func (a *App) RetryYouTubeDownloads(ctx context.Context) (int64, error) {
+	return a.uow.Downloads.RetryYouTube(ctx)
 }
 
 func tagValue(meta map[string]any, key string) string {
