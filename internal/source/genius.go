@@ -70,7 +70,7 @@ func (g *Genius) artistID(ctx context.Context, lookup Lookup) (int64, error) {
 
 	// Если Genius не индексирует кириллическое название, ищем его транслитерацию.
 	if len(matches) == 0 {
-		query := transliterate(normalizeArtistName(lookup.Name))
+		query := domain.TransliterateRussian(normalizeArtistName(lookup.Name))
 		if query != normalizeArtistName(lookup.Name) {
 			matches, err = g.searchArtists(ctx, query, lookup.Name)
 			if err != nil {
@@ -128,7 +128,7 @@ func (g *Genius) searchArtists(ctx context.Context, search, name string) (map[in
 				matches[0][a.ID] = true
 			case normalizedName == normalizedQuery:
 				matches[1][a.ID] = true
-			case transliterate(normalizedName) == transliterate(normalizedQuery):
+			case domain.TransliterateRussian(normalizedName) == domain.TransliterateRussian(normalizedQuery):
 				matches[2][a.ID] = true
 			case artistNameMatches(a.Name, name):
 				matches[3][a.ID] = true
@@ -151,7 +151,8 @@ func (g *Genius) searchArtists(ctx context.Context, search, name string) (map[in
 
 func artistNameMatches(name, query string) bool {
 	name, query = normalizeArtistName(name), normalizeArtistName(query)
-	return containsArtistWords(name, query) || containsArtistWords(transliterate(name), transliterate(query))
+	return containsArtistWords(name, query) ||
+		containsArtistWords(domain.TransliterateRussian(name), domain.TransliterateRussian(query))
 }
 
 func containsArtistWords(name, query string) bool {
@@ -173,25 +174,6 @@ func containsArtistWords(name, query string) bool {
 		offset = index + len(query)
 	}
 	return false
-}
-
-func transliterate(name string) string {
-	letters := map[rune]string{
-		'а': "a", 'б': "b", 'в': "v", 'г': "g", 'д': "d", 'е': "e", 'ё': "e",
-		'ж': "zh", 'з': "z", 'и': "i", 'й': "y", 'к': "k", 'л': "l", 'м': "m",
-		'н': "n", 'о': "o", 'п': "p", 'р': "r", 'с': "s", 'т': "t", 'у': "u",
-		'ф': "f", 'х': "kh", 'ц': "ts", 'ч': "ch", 'ш': "sh", 'щ': "shch",
-		'ъ': "", 'ы': "y", 'ь': "", 'э': "e", 'ю': "yu", 'я': "ya",
-	}
-	var out strings.Builder
-	for _, r := range name {
-		if replacement, ok := letters[r]; ok {
-			out.WriteString(replacement)
-		} else {
-			out.WriteRune(r)
-		}
-	}
-	return out.String()
 }
 
 func normalizeArtistName(name string) string {

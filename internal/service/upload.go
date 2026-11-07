@@ -48,6 +48,7 @@ func stageUpload(
 ) (d domain.Download, result error) {
 	directory, ok := map[string]string{
 		"artists": "images/artists", "albums": "images/albums", "tracks": "music/tracks",
+		"quiz-packs": "images/quiz-packs",
 	}[resource]
 	if !ok {
 		return d, domain.ErrNotFound

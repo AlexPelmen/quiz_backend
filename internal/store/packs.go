@@ -25,6 +25,8 @@ func (r PackRepository) Pick(ctx context.Context, excluded []uuid.UUID, filter P
 		WHEN 'artist_by_cover' THEN EXISTS(SELECT 1 FROM albums al `+approvedCover+`
 			WHERE al.artist_id=a.id AND al.points>0)
 		WHEN 'artist_by_logo' THEN EXISTS(SELECT 1 FROM downloads d WHERE d.id=a.logo_download_id AND d.status='finished')
+		WHEN 'artist_by_albums' THEN (SELECT count(DISTINCT al.name) FROM albums al
+			WHERE al.artist_id=a.id AND al.points>0 AND strpos(lower(al.name),lower(a.name))=0)>=2
 		ELSE EXISTS(SELECT 1 FROM tracks t WHERE t.artist_id=a.id AND t.points>0
 			AND ($3<>'track_vowels' OR quiz_title_has_consonant(t.name)) AND EXISTS(`+finishedAudio+`)) END
 		ORDER BY -ln(GREATEST(random(),1e-15))/a.points LIMIT 1`, args)
@@ -43,9 +45,24 @@ func (r PackRepository) Pick(ctx context.Context, excluded []uuid.UUID, filter P
 		return c, err
 	case "artist_by_logo":
 		return c, nil
+	case "artist_by_albums":
+		err = r.db.QueryRow(ctx, `SELECT ARRAY(SELECT name FROM (
+			SELECT DISTINCT name FROM albums WHERE artist_id=$1 AND points>0 AND strpos(lower(name),lower($2))=0
+		) names ORDER BY random() LIMIT 3)`, artist.ID, artist.Name).Scan(&c.AlbumNames)
+
+		return c, err
 	default:
-		return r.pickTrack(ctx, c, filter.Kind)
+		return r.PickTrack(ctx, c, filter.Kind)
 	}
+}
+
+// AudioArtists возвращает доступных исполнителей с готовым звуком в порядке взвешенной выборки.
+func (r PackRepository) AudioArtists(ctx context.Context, excluded []uuid.UUID, tag string) ([]domain.Artist, error) {
+	return query[domain.Artist](ctx, r.db, `SELECT a.* FROM artists a
+		WHERE a.points>0 AND a.status='parsed' AND NOT(a.id=ANY($1::uuid[]))
+		AND ($2='' OR $2=ANY(a.tags)) AND EXISTS(SELECT 1 FROM tracks t
+			WHERE t.artist_id=a.id AND t.points>0 AND EXISTS(`+finishedAudio+`))
+		ORDER BY -ln(GREATEST(random(),1e-15))/a.points`, []any{excluded, tag})
 }
 
 // PickFilter задаёт тип раунда и необязательный тег исполнителя.
@@ -58,7 +75,8 @@ const finishedAudio = `SELECT d FROM track_to_download td JOIN downloads d ON d.
 	WHERE td.track_id=t.id AND d.status='finished' AND d.file_type='mp3'
 	AND (d.meta->>'duration_seconds')::double precision>0`
 
-func (r PackRepository) pickTrack(ctx context.Context, c domain.Candidate, kind string) (domain.Candidate, error) {
+// PickTrack выбирает готовый трек для заданного исполнителя.
+func (r PackRepository) PickTrack(ctx context.Context, c domain.Candidate, kind string) (domain.Candidate, error) {
 	err := r.db.QueryRow(ctx, `SELECT to_jsonb(t),COALESCE(to_jsonb(al),'{}'::jsonb),to_jsonb(sound.d) FROM tracks t
 		LEFT JOIN albums al ON al.id=t.album_id
 		JOIN LATERAL (`+finishedAudio+`
@@ -77,8 +95,9 @@ func (r PackRepository) pickTrack(ctx context.Context, c domain.Candidate, kind 
 
 // Create атомарно сохраняется вызывающим Unit of Work вместе с раундами.
 func (r PackRepository) Create(ctx context.Context, p domain.QuizPack) error {
-	if err := execute(ctx, r.db, `INSERT INTO quiz_packs(id,name,description,tags) VALUES($1,$2,$3,$4)`,
-		[]any{p.ID, p.Name, p.Description, p.Tags}); err != nil {
+	if err := execute(ctx, r.db, `INSERT INTO quiz_packs(id,name,description,tags,difficulty,cover_download_id)
+		VALUES($1,$2,$3,$4,COALESCE(NULLIF($5,''),'medium'),$6)`,
+		[]any{p.ID, p.Name, p.Description, p.Tags, p.Difficulty, p.CoverDownloadID}); err != nil {
 		return err
 	}
 

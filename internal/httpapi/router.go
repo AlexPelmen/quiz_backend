@@ -255,7 +255,15 @@ func decode(c *gin.Context, target any) error {
 		return err
 	}
 
-	d := json.NewDecoder(strings.NewReader(string(data)))
+	return decodeObject(string(data), target)
+}
+
+func decodeObject(data string, target any) error {
+	if !json.Valid([]byte(data)) || !strings.HasPrefix(strings.TrimSpace(data), "{") {
+		return domain.ErrInvalid
+	}
+
+	d := json.NewDecoder(strings.NewReader(data))
 	d.DisallowUnknownFields()
 
 	if err := d.Decode(target); err != nil {
@@ -322,12 +330,18 @@ func (a *api) savePack(c *gin.Context, id *uuid.UUID) {
 	}
 
 	var f service.PackForm
+
+	if c.ContentType() == "multipart/form-data" {
+		a.generatePackWithCover(c)
+		return
+	}
+
 	if err := decode(c, &f); err != nil {
 		a.respond(c, nil, err)
 		return
 	}
 
-	value, err := a.app.Generate(c.Request.Context(), f)
+	value, err := a.app.Generate(c.Request.Context(), f, nil)
 	a.respond(c, value, err)
 }
 

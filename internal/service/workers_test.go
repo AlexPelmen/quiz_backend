@@ -139,7 +139,7 @@ func TestParserPersistsUnavailableTrack(t *testing.T) {
 		t.Fatal("фоновые горутины не завершились")
 	}
 
-	if _, err := app.Generate(t.Context(), PackForm{Name: "Без звука"}); !errors.Is(err, domain.ErrInsufficient) {
+	if _, err := app.Generate(t.Context(), PackForm{Name: "Без звука"}, nil); !errors.Is(err, domain.ErrInsufficient) {
 		t.Fatalf("вопрос без доступного звука попал в пакет: %v", err)
 	}
 }

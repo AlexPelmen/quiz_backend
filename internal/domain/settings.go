@@ -95,7 +95,8 @@ func (s Settings) Validate() error {
 // RoundTypeValid проверяет наличие обработчика указанного типа.
 func RoundTypeValid(kind string) bool {
 	switch kind {
-	case "artist_by_track", "artist_by_cover", "track_vowels", "artist_by_logo", "artist_initial":
+	case "artist_by_track", "artist_by_cover", "track_vowels", "artist_by_logo", "artist_initial",
+		"artist_by_albums", "artist_cities", "artist_growth", "artist_alphabet":
 		return true
 	default:
 		return false

@@ -114,13 +114,15 @@ type ParseRun struct {
 
 // QuizPack объединяет упорядоченные раунды.
 type QuizPack struct {
-	ID          uuid.UUID   `json:"id"`
-	Name        string      `json:"name"`
-	Description string      `json:"description"`
-	Tags        []string    `json:"tags"`
-	CreatedAt   time.Time   `json:"created_at"`
-	UpdatedAt   time.Time   `json:"updated_at"`
-	Rounds      []QuizRound `json:"rounds,omitempty" db:"-"`
+	Difficulty      string      `json:"difficulty"`
+	CoverDownloadID *uuid.UUID  `json:"cover_download_id"`
+	ID              uuid.UUID   `json:"id"`
+	Name            string      `json:"name"`
+	Description     string      `json:"description"`
+	Tags            []string    `json:"tags"`
+	CreatedAt       time.Time   `json:"created_at"`
+	UpdatedAt       time.Time   `json:"updated_at"`
+	Rounds          []QuizRound `json:"rounds,omitempty" db:"-"`
 }
 
 // QuizRound содержит ровно десять вопросов одного типа.
@@ -154,10 +156,11 @@ type Question struct {
 
 // Candidate содержит данные, необходимые обработчику раунда.
 type Candidate struct {
-	Artist Artist
-	Album  Album
-	Track  Track
-	Sound  *Download
+	AlbumNames []string
+	Artist     Artist
+	Album      Album
+	Track      Track
+	Sound      *Download
 }
 
 // Page задаёт ограничения выборки каталога.
