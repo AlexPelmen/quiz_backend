@@ -39,6 +39,25 @@ func TestQuotaKeepsNewestObservation(t *testing.T) {
 	}
 }
 
+func TestArtistsListNewestFirstAcrossPages(t *testing.T) {
+	pool, uow := testutil.Database(t)
+	ctx := t.Context()
+	ids := []uuid.UUID{uuid.New(), uuid.New(), uuid.New()}
+	for i, id := range ids {
+		_, err := pool.Exec(ctx, `INSERT INTO artists(id, name, tags, points, created_at)
+			VALUES ($1, $2, ARRAY['rock'], 100, $3)`, id, fmt.Sprintf("Исполнитель %d", i), time.Date(2020+i, 1, 1, 0, 0, 0, 0, time.UTC))
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	for page := range ids {
+		artists, err := uow.Artists.List(ctx, domain.Page{Limit: 1, Offset: page, Tag: "rock"})
+		if err != nil || len(artists) != 1 || artists[0].ID != ids[len(ids)-1-page] {
+			t.Fatalf("неверный порядок страницы %d: %+v, ошибка: %v", page, artists, err)
+		}
+	}
+}
+
 func TestTracksListNewestFirstAcrossPages(t *testing.T) {
 	pool, uow := testutil.Database(t)
 	ctx := t.Context()

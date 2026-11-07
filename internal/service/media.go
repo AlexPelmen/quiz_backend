@@ -152,7 +152,7 @@ func convertMP3(ctx context.Context, s domain.Settings, input string, output dom
 	return err
 }
 
-func downloadFile(ctx context.Context, s domain.Settings, d *domain.Download) (result error) {
+func downloadFile(ctx context.Context, s domain.Settings, d *domain.Download, directory string) (result error) {
 	root, err := filepath.Abs(s.StorageDir)
 	if err != nil {
 		return err
@@ -210,7 +210,11 @@ func downloadFile(ctx context.Context, s domain.Settings, d *domain.Download) (r
 		return err
 	}
 
-	path := filepath.Join(root, d.ID.String()+"."+d.FileType)
+	targetDir := filepath.Join(root, filepath.FromSlash(directory))
+	if err := os.MkdirAll(targetDir, 0o750); err != nil {
+		return err
+	}
+	path := filepath.Join(targetDir, d.ID.String()+"."+d.FileType)
 	if err := os.Rename(input, path); err != nil {
 		return err
 	}
@@ -296,7 +300,7 @@ type clipInput struct {
 
 func (m *Media) clip(ctx context.Context, s domain.Settings, in clipInput) (path string, result error) {
 	q, d := in.Question, in.Download
-	dir := filepath.Join(filepath.Dir(d.URI), "clips")
+	dir := filepath.Join(s.StorageDir, "music", "clips")
 
 	path = filepath.Join(dir, q.ID.String()+".mp3")
 	if _, err := os.Stat(path); err == nil {

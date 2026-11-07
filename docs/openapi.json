@@ -13,7 +13,7 @@
   "paths": {
     "/api/v1/artists": {
       "get": {
-        "summary": "Список artists",
+        "summary": "Список исполнителей от новых к старым",
         "parameters": [
           {
             "name": "limit",

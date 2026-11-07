@@ -12,11 +12,11 @@ import (
 // ArtistRepository управляет исполнителями.
 type ArtistRepository struct{ db DB }
 
-// List возвращает страницу исполнителей с фильтрацией.
+// List возвращает страницу исполнителей от новых к старым с фильтрацией.
 func (r ArtistRepository) List(ctx context.Context, p domain.Page) ([]domain.Artist, error) {
 	return query[domain.Artist](ctx, r.db, `SELECT * FROM artists
 		WHERE ($3='' OR status=$3) AND ($4='' OR $4=ANY(tags))
-		ORDER BY created_at,id LIMIT $1 OFFSET $2`, []any{p.Limit, p.Offset, p.Status, p.Tag})
+		ORDER BY created_at DESC,id DESC LIMIT $1 OFFSET $2`, []any{p.Limit, p.Offset, p.Status, p.Tag})
 }
 
 // Get возвращает исполнителя по ID.

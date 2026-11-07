@@ -57,6 +57,9 @@ func testMediaClip(t *testing.T, s domain.Settings, duration string) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if want := filepath.Join(s.StorageDir, "music", "clips", q.ID.String()+".mp3"); path != want {
+		t.Fatalf("неверный путь фрагмента: %s, ожидался %s", path, want)
+	}
 
 	result, err := probe(ctx, s.FFprobe, path)
 	if err != nil || math.Abs(result-math.Min(actual, 30)) > 0.15 {

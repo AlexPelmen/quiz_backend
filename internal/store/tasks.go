@@ -77,6 +77,13 @@ func (r RunRepository) Finish(ctx context.Context, run domain.ParseRun) error {
 // DownloadRepository управляет очередью скачивания.
 type DownloadRepository struct{ db DB }
 
+// ImageIsArtist сообщает, используется ли изображение исполнителем.
+func (r DownloadRepository) ImageIsArtist(ctx context.Context, id uuid.UUID) (bool, error) {
+	var isArtist bool
+	err := r.db.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM artists WHERE logo_download_id=$1)`, id).Scan(&isArtist)
+	return isArtist, err
+}
+
 // Create обеспечивает повторное использование уже известного источника.
 func (r DownloadRepository) Create(ctx context.Context, d domain.Download) (domain.Download, error) {
 	return one[domain.Download](ctx, r.db, `INSERT INTO downloads(id,source_type,source_uri,file_type,meta)

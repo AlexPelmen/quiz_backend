@@ -93,7 +93,20 @@ func (a *App) downloadNext(ctx context.Context, s domain.Settings) error {
 	taskCtx, cancel := context.WithTimeout(ctx, time.Duration(s.TaskTimeoutSeconds)*time.Second)
 	defer cancel()
 
-	err = downloadFile(taskCtx, s, &d)
+	directory := "music/tracks"
+	if d.SourceType == "image" {
+		isArtist, lookupErr := a.uow.Downloads.ImageIsArtist(taskCtx, d.ID)
+		if lookupErr != nil {
+			err = lookupErr
+		} else if isArtist {
+			directory = "images/artists"
+		} else {
+			directory = "images/albums"
+		}
+	}
+	if err == nil {
+		err = downloadFile(taskCtx, s, &d, directory)
+	}
 
 	if ctx.Err() != nil {
 		// При остановке процесса захват истечёт, и задача продолжится после перезапуска.
