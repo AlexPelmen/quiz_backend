@@ -121,15 +121,16 @@ func (r AlbumRepository) Get(ctx context.Context, id uuid.UUID) (domain.Album, e
 
 // Create добавляет альбом вручную.
 func (r AlbumRepository) Create(ctx context.Context, a domain.Album) (domain.Album, error) {
-	return one[domain.Album](ctx, r.db, `INSERT INTO albums(id,name,artist_id,points,release_date,manual_release_date)
-		VALUES($1,$2,$3,$4,$5,$6) RETURNING *`, []any{a.ID, a.Name, a.ArtistID, a.Points, a.ReleaseDate, a.ManualReleaseDate})
+	return one[domain.Album](ctx, r.db, `INSERT INTO albums(id,name,artist_id,points,release_date,manual_release_date,tags)
+		VALUES($1,$2,$3,$4,$5,$6,COALESCE($7,'{}'::text[])) RETURNING *`,
+		[]any{a.ID, a.Name, a.ArtistID, a.Points, a.ReleaseDate, a.ManualReleaseDate, a.Tags})
 }
 
 // Update изменяет пользовательские атрибуты альбома.
 func (r AlbumRepository) Update(ctx context.Context, a domain.Album) (domain.Album, error) {
 	return one[domain.Album](ctx, r.db, `UPDATE albums SET name=$2,points=$3,release_date=$4,
-		manual_release_date=$5,updated_at=now() WHERE id=$1 RETURNING *`,
-		[]any{a.ID, a.Name, a.Points, a.ReleaseDate, a.ManualReleaseDate})
+		manual_release_date=$5,tags=$6,updated_at=now() WHERE id=$1 RETURNING *`,
+		[]any{a.ID, a.Name, a.Points, a.ReleaseDate, a.ManualReleaseDate, a.Tags})
 }
 
 // SetCover назначает обложку, загруженную вручную.
@@ -198,16 +199,16 @@ func (r TrackRepository) Get(ctx context.Context, id uuid.UUID) (domain.Track, e
 
 // Create добавляет трек, проверяя принадлежность альбома исполнителю.
 func (r TrackRepository) Create(ctx context.Context, t domain.Track) (domain.Track, error) {
-	return one[domain.Track](ctx, r.db, `INSERT INTO tracks(id,name,artist_id,album_id,points)
-		SELECT $1,$2,$3,$4,$5 WHERE $4::uuid IS NULL
+	return one[domain.Track](ctx, r.db, `INSERT INTO tracks(id,name,artist_id,album_id,points,tags)
+		SELECT $1,$2,$3,$4,$5,COALESCE($6,'{}'::text[]) WHERE $4::uuid IS NULL
 		OR EXISTS(SELECT 1 FROM albums WHERE id=$4 AND artist_id=$3) RETURNING *`,
-		[]any{t.ID, t.Name, t.ArtistID, t.AlbumID, t.Points})
+		[]any{t.ID, t.Name, t.ArtistID, t.AlbumID, t.Points, t.Tags})
 }
 
 // Update изменяет название и оценку трека.
 func (r TrackRepository) Update(ctx context.Context, t domain.Track) (domain.Track, error) {
-	return one[domain.Track](ctx, r.db, `UPDATE tracks SET name=$2,points=$3,updated_at=now()
-		WHERE id=$1 RETURNING *`, []any{t.ID, t.Name, t.Points})
+	return one[domain.Track](ctx, r.db, `UPDATE tracks SET name=$2,points=$3,tags=$4,updated_at=now()
+		WHERE id=$1 RETURNING *`, []any{t.ID, t.Name, t.Points, t.Tags})
 }
 
 // Import сохраняет трек по ID Genius без изменения пользовательской оценки.

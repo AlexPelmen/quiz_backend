@@ -39,6 +39,10 @@ func Router(app *service.App, logger *slog.Logger) *gin.Engine {
 	r.GET("/ready", h.ready)
 
 	v1 := r.Group("/api/v1")
+	v1.GET("/tags", h.listTags)
+	v1.POST("/tags", h.saveTag)
+	v1.PATCH("/tags/:id", h.saveTag)
+	v1.DELETE("/tags/:id", h.deleteTag)
 	for _, resource := range []string{"artists", "albums", "tracks", "downloads", "parsing-runs", "quiz-packs"} {
 		v1.GET("/"+resource, h.read(resource))
 		v1.GET("/"+resource+"/:id", h.read(resource))

@@ -599,6 +599,12 @@
                   },
                   "release_date": {
                     "type": "string"
+                  },
+                  "tags": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
                   }
                 },
                 "additionalProperties": false,
@@ -753,6 +759,12 @@
                   },
                   "release_date": {
                     "type": "string"
+                  },
+                  "tags": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
                   }
                 },
                 "additionalProperties": false
@@ -1026,6 +1038,12 @@
                     "minimum": 0,
                     "maximum": 100,
                     "default": 100
+                  },
+                  "tags": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
                   }
                 },
                 "additionalProperties": false,
@@ -1177,6 +1195,12 @@
                     "minimum": 0,
                     "maximum": 100,
                     "default": 100
+                  },
+                  "tags": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
                   }
                 },
                 "additionalProperties": false
@@ -2994,6 +3018,151 @@
           }
         }
       }
+    },
+    "/api/v1/tags": {
+      "get": {
+        "summary": "Справочник тегов",
+        "responses": {
+          "200": {
+            "description": "Теги",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/Tag"
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "summary": "Создать тег",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "name"
+                ],
+                "additionalProperties": false,
+                "properties": {
+                  "name": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 100
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Созданный тег",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Tag"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Некорректное название"
+          },
+          "409": {
+            "description": "Тег уже существует"
+          }
+        }
+      }
+    },
+    "/api/v1/tags/{id}": {
+      "patch": {
+        "summary": "Переименовать тег у исполнителей, альбомов, треков и пакетов",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "name"
+                ],
+                "additionalProperties": false,
+                "properties": {
+                  "name": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 100
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Изменённый тег",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Tag"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Некорректное название или ID"
+          },
+          "404": {
+            "description": "Тег не найден"
+          },
+          "409": {
+            "description": "Тег уже существует"
+          }
+        }
+      },
+      "delete": {
+        "summary": "Удалить неиспользуемый тег",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Тег удалён"
+          },
+          "404": {
+            "description": "Тег не найден"
+          },
+          "409": {
+            "description": "Тег используется"
+          }
+        }
+      }
     }
   },
   "components": {
@@ -3162,6 +3331,12 @@
           "updated_at": {
             "type": "string",
             "format": "date-time"
+          },
+          "tags": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
           }
         },
         "additionalProperties": false
@@ -3231,6 +3406,12 @@
               "manual",
               "missing"
             ]
+          },
+          "tags": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
           }
         },
         "additionalProperties": false
@@ -3570,6 +3751,12 @@
           },
           "release_date": {
             "type": "string"
+          },
+          "tags": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
           }
         },
         "additionalProperties": false
@@ -3595,6 +3782,12 @@
             "minimum": 0,
             "maximum": 100,
             "default": 100
+          },
+          "tags": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
           }
         },
         "additionalProperties": false
@@ -3806,6 +3999,22 @@
           "observed_at": {
             "type": "string",
             "format": "date-time"
+          }
+        }
+      },
+      "Tag": {
+        "type": "object",
+        "required": [
+          "id",
+          "name"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "name": {
+            "type": "string"
           }
         }
       }

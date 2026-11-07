@@ -52,6 +52,7 @@ type Album struct {
 	CoverDownloadID   *uuid.UUID `json:"cover_download_id"`
 	ReleaseDate       string     `json:"release_date"`
 	ArtistID          uuid.UUID  `json:"artist_id"`
+	Tags              []string   `json:"tags"`
 	Points            float64    `json:"points"`
 	GuessNum          int        `json:"guess_num"`
 	GeniusID          *int64     `json:"genius_id"`
@@ -68,6 +69,7 @@ type Track struct {
 	Name      string     `json:"name"`
 	ArtistID  uuid.UUID  `json:"artist_id"`
 	AlbumID   *uuid.UUID `json:"album_id"`
+	Tags      []string   `json:"tags"`
 	Points    float64    `json:"points"`
 	GuessNum  int        `json:"guess_num"`
 	GeniusID  *int64     `json:"genius_id"`

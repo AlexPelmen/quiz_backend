@@ -211,6 +211,7 @@ func applyArtist(r *domain.Artist, f ArtistForm) {
 // CatalogForm задаёт поля создания или обновления альбома и трека.
 type CatalogForm struct {
 	Name        *string    `json:"name"`
+	Tags        *[]string  `json:"tags"`
 	Points      *float64   `json:"points"`
 	ArtistID    *uuid.UUID `json:"artist_id"`
 	AlbumID     *uuid.UUID `json:"album_id"`
@@ -226,7 +227,7 @@ func (a *App) SaveAlbum(ctx context.Context, id *uuid.UUID, f CatalogForm) (doma
 	var result domain.Album
 
 	err := a.uow.Transaction(ctx, func(tx *store.UnitOfWork) error {
-		r := domain.Album{ID: uuid.New(), Points: 100}
+		r := domain.Album{ID: uuid.New(), Points: 100, Tags: []string{}}
 
 		if id != nil {
 			var err error
@@ -240,6 +241,10 @@ func (a *App) SaveAlbum(ctx context.Context, id *uuid.UUID, f CatalogForm) (doma
 		}
 
 		applyNamePoints(&r.Name, &r.Points, f)
+
+		if f.Tags != nil {
+			r.Tags = *f.Tags
+		}
 
 		if f.ReleaseDate != nil {
 			r.ReleaseDate = *f.ReleaseDate
@@ -276,7 +281,7 @@ func (a *App) SaveTrack(ctx context.Context, id *uuid.UUID, f CatalogForm) (doma
 	var result domain.Track
 
 	err := a.uow.Transaction(ctx, func(tx *store.UnitOfWork) error {
-		r := domain.Track{ID: uuid.New(), Points: 100}
+		r := domain.Track{ID: uuid.New(), Points: 100, Tags: []string{}}
 
 		if id != nil {
 			var err error
@@ -294,6 +299,10 @@ func (a *App) SaveTrack(ctx context.Context, id *uuid.UUID, f CatalogForm) (doma
 		}
 
 		applyNamePoints(&r.Name, &r.Points, f)
+
+		if f.Tags != nil {
+			r.Tags = *f.Tags
+		}
 
 		if err := validateNamePoints(r.Name, r.Points); err != nil {
 			return err

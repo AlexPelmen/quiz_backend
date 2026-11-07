@@ -37,6 +37,7 @@ type UnitOfWork struct {
 	Packs     PackRepository
 	Settings  SettingsRepository
 	Quota     QuotaRepository
+	Tags      TagRepository
 }
 
 // New создаёт Unit of Work поверх пула соединений.
@@ -56,7 +57,8 @@ func bind(db DB) *UnitOfWork {
 	return &UnitOfWork{
 		db: db, Artists: ArtistRepository{db}, Albums: AlbumRepository{db},
 		Tracks: TrackRepository{db}, Downloads: DownloadRepository{db},
-		Runs: RunRepository{db}, Packs: PackRepository{db}, Settings: SettingsRepository{db}, Quota: QuotaRepository{db},
+		Runs: RunRepository{db}, Packs: PackRepository{db}, Settings: SettingsRepository{db},
+		Quota: QuotaRepository{db}, Tags: TagRepository{db},
 	}
 }
 
