@@ -22,10 +22,11 @@ func (r PackRepository) Pick(ctx context.Context, excluded []uuid.UUID, filter P
 	artist, err := one[domain.Artist](ctx, r.db, `SELECT a.* FROM artists a
 		WHERE a.points>0 AND a.status='parsed' AND NOT(a.id=ANY($1::uuid[]))
 		AND ($2='' OR $2=ANY(a.tags)) AND CASE $3
-		WHEN 'artist_by_cover' THEN EXISTS(SELECT 1 FROM albums al JOIN downloads d ON d.id=al.cover_download_id
-			WHERE al.artist_id=a.id AND al.points>0 AND d.status='finished')
+		WHEN 'artist_by_cover' THEN EXISTS(SELECT 1 FROM albums al `+approvedCover+`
+			WHERE al.artist_id=a.id AND al.points>0)
 		WHEN 'artist_by_logo' THEN EXISTS(SELECT 1 FROM downloads d WHERE d.id=a.logo_download_id AND d.status='finished')
-		ELSE EXISTS(SELECT 1 FROM tracks t WHERE t.artist_id=a.id AND t.points>0 AND EXISTS(`+finishedAudio+`)) END
+		ELSE EXISTS(SELECT 1 FROM tracks t WHERE t.artist_id=a.id AND t.points>0
+			AND ($3<>'track_vowels' OR quiz_title_has_consonant(t.name)) AND EXISTS(`+finishedAudio+`)) END
 		ORDER BY -ln(GREATEST(random(),1e-15))/a.points LIMIT 1`, args)
 	if err != nil {
 		return c, err
@@ -35,14 +36,15 @@ func (r PackRepository) Pick(ctx context.Context, excluded []uuid.UUID, filter P
 
 	switch filter.Kind {
 	case "artist_by_cover":
-		c.Album, err = one[domain.Album](ctx, r.db, `SELECT al.* FROM albums al JOIN downloads d ON d.id=al.cover_download_id
-			WHERE al.artist_id=$1 AND al.points>0 AND d.status='finished'
+		c.Album, err = one[domain.Album](ctx, r.db, `SELECT al.* FROM albums al `+approvedCover+`
+			WHERE al.artist_id=$1 AND al.points>0
 			ORDER BY -ln(GREATEST(random(),1e-15))/al.points LIMIT 1`, []any{artist.ID})
+
 		return c, err
 	case "artist_by_logo":
 		return c, nil
 	default:
-		return r.pickTrack(ctx, c)
+		return r.pickTrack(ctx, c, filter.Kind)
 	}
 }
 
@@ -56,16 +58,16 @@ const finishedAudio = `SELECT d FROM track_to_download td JOIN downloads d ON d.
 	WHERE td.track_id=t.id AND d.status='finished' AND d.file_type='mp3'
 	AND (d.meta->>'duration_seconds')::double precision>0`
 
-func (r PackRepository) pickTrack(ctx context.Context, c domain.Candidate) (domain.Candidate, error) {
+func (r PackRepository) pickTrack(ctx context.Context, c domain.Candidate, kind string) (domain.Candidate, error) {
 	err := r.db.QueryRow(ctx, `SELECT to_jsonb(t),COALESCE(to_jsonb(al),'{}'::jsonb),to_jsonb(sound.d) FROM tracks t
 		LEFT JOIN albums al ON al.id=t.album_id
 		JOIN LATERAL (`+finishedAudio+`
 		ORDER BY (d.source_type='upload') DESC,
 			CASE WHEN d.source_type='upload' THEN d.created_at END DESC,
 			CASE WHEN d.source_type='upload' THEN d.id END DESC,d.created_at,d.id LIMIT 1) sound ON true
-		WHERE t.artist_id=$1 AND t.points>0
+		WHERE t.artist_id=$1 AND t.points>0 AND ($2<>'track_vowels' OR quiz_title_has_consonant(t.name))
 		ORDER BY -ln(GREATEST(random(),1e-15))/t.points LIMIT 1`,
-		c.Artist.ID).Scan(&c.Track, &c.Album, &c.Sound)
+		c.Artist.ID, kind).Scan(&c.Track, &c.Album, &c.Sound)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return c, domain.ErrNotFound
 	}

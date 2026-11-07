@@ -139,7 +139,7 @@ type Question struct {
 	Number          int            `json:"number"`
 	ArtistID        uuid.UUID      `json:"artist_id"`
 	TrackID         *uuid.UUID     `json:"track_id"`
-	AlbumID         *uuid.UUID     `json:"album_id"`
+	AlbumID         *uuid.UUID     `json:"-"`
 	PrimaryText     string         `json:"primary_text"`
 	SecondaryText   string         `json:"secondary_text"`
 	ImageDownloadID *uuid.UUID     `json:"image_download_id"`

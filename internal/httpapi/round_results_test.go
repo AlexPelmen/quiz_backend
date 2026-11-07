@@ -28,7 +28,9 @@ func TestRoundResults(t *testing.T) {
 
 	// Альбомы по-прежнему участвуют в раунде обложек, хотя треки не привязаны к ним.
 	if _, err := pool.Exec(t.Context(), `UPDATE artists SET points=40;
-		UPDATE albums SET points=40; UPDATE tracks SET points=40,album_id=NULL`); err != nil {
+		UPDATE albums SET points=40; UPDATE tracks SET points=40,album_id=NULL;
+		INSERT INTO album_guessing(album_id,cover_download_id,approved,rectangles)
+		SELECT id,cover_download_id,true,'[]' FROM albums`); err != nil {
 		t.Fatal(err)
 	}
 
@@ -126,8 +128,16 @@ func assertQuestionPopularity(t *testing.T, pool *pgxpool.Pool, expected expecte
 	t.Helper()
 
 	kind, q := expected.kind, expected.q
-	if (q.TrackID != nil) != (kind == "artist_by_track") || (q.AlbumID != nil) != (kind == "artist_by_cover") {
-		t.Fatalf("неверная цель вопроса: тип %s, трек %v, альбом %v", kind, q.TrackID, q.AlbumID)
+
+	var albumID *uuid.UUID
+
+	if err := pool.QueryRow(t.Context(), "SELECT album_id FROM quiz_questions WHERE id=$1", q.ID).
+		Scan(&albumID); err != nil {
+		t.Fatal(err)
+	}
+
+	if (q.TrackID != nil) != (kind == "artist_by_track") || (albumID != nil) != (kind == "artist_by_cover") {
+		t.Fatalf("неверная цель вопроса: тип %s, трек %v, альбом %v", kind, q.TrackID, albumID)
 	}
 
 	for _, table := range []string{"artists", "albums", "tracks"} {
@@ -146,7 +156,7 @@ func assertQuestionPopularity(t *testing.T, pool *pgxpool.Pool, expected expecte
 		}
 
 		wantPoints, wantShown := 40.0, 0
-		if table == "artists" || (table == "tracks" && q.TrackID != nil) || (table == "albums" && q.AlbumID != nil) {
+		if table == "artists" || (table == "tracks" && q.TrackID != nil) || (table == "albums" && albumID != nil) {
 			wantPoints, wantShown = expected.want, expected.count
 		}
 

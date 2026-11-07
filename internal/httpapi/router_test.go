@@ -209,6 +209,11 @@ func testMultipleRounds(t *testing.T, pool *pgxpool.Pool, router http.Handler) {
 		seedHTTPTrack(t, pool, i)
 	}
 
+	if _, err := pool.Exec(t.Context(), `INSERT INTO album_guessing(album_id,cover_download_id,approved,rectangles)
+		SELECT id,cover_download_id,true,'[]' FROM albums`); err != nil {
+		t.Fatal(err)
+	}
+
 	call := client(t, router)
 	data := call("POST", "/api/v1/quiz-packs", `{"name":"Два раунда"}`, 201)
 

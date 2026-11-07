@@ -37,7 +37,7 @@ func TestParseTrackLimit(t *testing.T) {
 }
 
 func TestVowelHint(t *testing.T) {
-	if got := vowelHint("Ёлка — Hello, мир!"); got != "Ё__а — _e__o, _и_!" {
+	if got := vowelHint("Ёлка — Hello, мир!"); got != "ёа — eo, и!" {
 		t.Fatalf("неожиданная подсказка: %q", got)
 	}
 }
@@ -68,9 +68,10 @@ func TestRoundScore(t *testing.T) {
 
 func TestQuestionHintsAndAnswerInfo(t *testing.T) {
 	for _, tc := range []struct{ title, want string }{
-		{"Song (Live) Again (2020)", "_o__ A_ai_"},
-		{"Song (Live (Remastered))", "_o__"},
-		{"Song (unfinished", "_o__ (u__i_i__e_"},
+		{"Song (Live) Again (2020)", "o aai"},
+		{"Song (Live (Remastered))", "o"},
+		{"Song (unfinished", "o (uiie"},
+		{"Song XZ _Again", "o aai"},
 	} {
 		if got := vowelHint(tc.title); got != tc.want {
 			t.Errorf("vowelHint(%q) = %q, want %q", tc.title, got, tc.want)

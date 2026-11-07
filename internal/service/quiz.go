@@ -165,7 +165,7 @@ func artistByTrack(c domain.Candidate) domain.Question {
 func artistByCover(c domain.Candidate) domain.Question {
 	return domain.Question{
 		PrimaryText: "Назовите исполнителя по обложке альбома",
-		Answer:      c.Artist.Name, ImageDownloadID: c.Album.CoverDownloadID,
+		Answer:      c.Artist.Name,
 	}
 }
 
@@ -179,14 +179,17 @@ func vowelHint(name string) string {
 	for parenthetical.MatchString(name) {
 		name = parenthetical.ReplaceAllString(name, "")
 	}
-	name = strings.Join(strings.Fields(name), " ")
-	return strings.Map(func(r rune) rune {
-		if unicode.IsLetter(r) && !strings.ContainsRune("аеёиоуыэюяaeiouy", unicode.ToLower(r)) {
-			return '_'
+
+	hint := strings.Map(func(r rune) rune {
+		r = unicode.ToLower(r)
+		if r == '_' || (unicode.IsLetter(r) && !strings.ContainsRune("аеёиоуыэюяaeiouy", r)) {
+			return -1
 		}
 
 		return r
 	}, name)
+
+	return strings.Join(strings.Fields(hint), " ")
 }
 
 func artistByLogo(c domain.Candidate) domain.Question {

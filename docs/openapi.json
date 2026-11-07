@@ -3163,6 +3163,224 @@
           }
         }
       }
+    },
+    "/api/v1/album-guessing": {
+      "get": {
+        "summary": "Очередь модерации готовых обложек",
+        "parameters": [
+          {
+            "name": "shuffle",
+            "in": "query",
+            "description": "Случайный порядок с чередованием исполнителей. Передавайте одинаковое число для всех страниц.",
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 4294967295
+            }
+          },
+          {
+            "name": "status",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "pending",
+                "approved",
+                "rejected"
+              ]
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 200
+            }
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 0
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Список обложек",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/AlbumGuessing"
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Некорректные параметры, маски или изображение"
+          }
+        }
+      }
+    },
+    "/api/v1/albums/{id}/guessing": {
+      "put": {
+        "summary": "Сохранить решение модератора и маски для текущей обложки",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "cover_download_id",
+                  "approved"
+                ],
+                "properties": {
+                  "cover_download_id": {
+                    "type": "string",
+                    "format": "uuid"
+                  },
+                  "approved": {
+                    "type": "boolean"
+                  },
+                  "rectangles": {
+                    "type": "array",
+                    "maxItems": 32,
+                    "items": {
+                      "$ref": "#/components/schemas/CoverRectangle"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "204": {
+            "description": "Решение сохранено"
+          },
+          "400": {
+            "description": "Некорректные параметры, маски или изображение"
+          },
+          "404": {
+            "description": "Обложка не найдена или недоступна"
+          },
+          "409": {
+            "description": "Версия обложки изменилась"
+          }
+        }
+      }
+    },
+    "/api/v1/albums/{id}/guessing-preview": {
+      "get": {
+        "summary": "Получить исходную обложку для редактора модерации",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "cover_id",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Обложка PNG",
+            "content": {
+              "image/png": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Некорректные параметры, маски или изображение"
+          },
+          "404": {
+            "description": "Обложка не найдена или недоступна"
+          }
+        }
+      }
+    },
+    "/api/v1/quiz-packs/{id}/questions/{number}/cover": {
+      "get": {
+        "summary": "Получить одобренную обложку с масками",
+        "description": "Маски наносятся сервером при запросе; оригинал не возвращается.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "number",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Обложка PNG",
+            "content": {
+              "image/png": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Некорректные параметры, маски или изображение"
+          },
+          "404": {
+            "description": "Обложка не найдена или недоступна"
+          }
+        }
+      }
     }
   },
   "components": {
@@ -3542,22 +3760,12 @@
               }
             ]
           },
-          "album_id": {
-            "anyOf": [
-              {
-                "type": "string",
-                "format": "uuid"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
           "primary_text": {
             "type": "string"
           },
           "secondary_text": {
-            "type": "string"
+            "type": "string",
+            "description": "Подсказка к вопросу. В новых раундах track_vowels она строчная, без согласных и подчёркиваний."
           },
           "image_download_id": {
             "anyOf": [
@@ -4015,6 +4223,80 @@
           },
           "name": {
             "type": "string"
+          }
+        }
+      },
+      "CoverRectangle": {
+        "type": "object",
+        "description": "Два угла в долях 1/10000 от размеров обложки. x1 < x2 и y1 < y2.",
+        "required": [
+          "x1",
+          "y1",
+          "x2",
+          "y2"
+        ],
+        "properties": {
+          "x1": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 10000
+          },
+          "y1": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 10000
+          },
+          "x2": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 10000
+          },
+          "y2": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 10000
+          }
+        }
+      },
+      "AlbumGuessing": {
+        "type": "object",
+        "required": [
+          "album_id",
+          "album_name",
+          "artist_name",
+          "cover_download_id",
+          "status",
+          "rectangles"
+        ],
+        "properties": {
+          "album_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "album_name": {
+            "type": "string"
+          },
+          "artist_name": {
+            "type": "string"
+          },
+          "cover_download_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "pending",
+              "approved",
+              "rejected"
+            ]
+          },
+          "rectangles": {
+            "type": "array",
+            "maxItems": 32,
+            "items": {
+              "$ref": "#/components/schemas/CoverRectangle"
+            }
           }
         }
       }
