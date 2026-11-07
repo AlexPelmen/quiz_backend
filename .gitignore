@@ -1,0 +1,14 @@
+.env
+.env.*
+!.env.example
+data/
+media/
+.test-runtime/
+coverage.out
+/quiz
+/quiz.exe
+*.test
+.idea/
+.vscode/
+*.log
+.DS_Store

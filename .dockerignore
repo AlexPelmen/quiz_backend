@@ -1,0 +1,6 @@
+.git
+.env
+.test-runtime
+data
+quiz.exe
+coverage.out

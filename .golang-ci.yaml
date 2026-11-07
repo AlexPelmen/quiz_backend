@@ -1,0 +1,56 @@
+version: "2" # Явно указываем современную версию конфигурации для v2
+
+run:
+  timeout: 3m
+  modules-download-mode: readonly
+
+# В v2 настройки линтеров и форматтеров разделены по своим блокам
+linters:
+  default: none # Выключаем стандартный набор, чтобы настроить свой корпоративный стек
+  enable:
+    - wsl          # Вертикальная табуляция и логические блоки (Uber)
+    - revive       # Нейминг, лимиты аргументов и ресиверы (Google/Uber)
+    - lll          # Контроль длины строк (заставит разносить Builder в столбик)
+    - funlen       # Контроль длины функций
+    - staticcheck  # Глубокий анализ багов (ошибки конкурентности, утечки)
+    - errcheck     # Проверка, что ИИ не забыл обработать err
+
+  settings:
+    revive:
+      rules:
+        - name: var-naming # Правильный camelCase и аббревиатуры (типа URL, ID)
+          severity: warning
+        - name: argument-limit # Максимум 4 аргумента в функции
+          severity: warning
+          arguments: [4]
+        - name: function-result-limit # Максимум 3 возвращаемых значения
+          severity: warning
+          arguments: [3]
+        - name: receiver-naming # Запрещает this/self в методах структур
+          severity: warning
+
+    wsl:
+      strict-append: true
+      allow-assign-and-call: false
+
+    lll:
+      line-length: 120 # Все, что длиннее (включая Builder), придется переносить в столбик
+
+    funlen:
+      lines: 80
+      statements: 50
+
+# В v2 утилиты форматирования кода вынесены в отдельную секцию
+formatters:
+  enable:
+    - gofumpt    # Жесткий кодстайл и принудительные переносы (Docker/Kubernetes)
+    - goimports  # Идеальный порядок в импортах
+
+  settings:
+    goimports:
+      # Ваши внутренние модули будут в отдельной изолированной группе импортов
+      local-prefixes:
+        - devkeeper.com/quiz
+
+    gofumpt:
+      extra-rules: true

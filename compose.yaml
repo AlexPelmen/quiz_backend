@@ -1,0 +1,44 @@
+name: quiz
+services:
+  db:
+    image: postgres:17
+    env_file: .env
+    environment:
+      POSTGRES_USER: quiz
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-quiz}
+      POSTGRES_DB: quiz
+    ports:
+      - "127.0.0.1:15432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U quiz -d quiz"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+  api:
+    build: .
+    env_file: .env
+    environment:
+      DATABASE_URL: postgres://quiz:${POSTGRES_PASSWORD:-quiz}@db:5432/quiz?sslmode=disable
+      HTTP_ADDR: 0.0.0.0:8080
+    ports:
+      - "127.0.0.1:8080:8080"
+    depends_on:
+      db:
+        condition: service_healthy
+    volumes:
+      - ${QUIZ_MEDIA_DIR:-../media}:/app/data
+    stop_grace_period: 30s
+  test:
+    profiles: [test]
+    build:
+      context: .
+      target: test
+    environment:
+      TEST_DATABASE_URL: postgres://quiz:${POSTGRES_PASSWORD:-quiz}@db:5432/quiz?sslmode=disable
+    depends_on:
+      db:
+        condition: service_healthy
+volumes:
+  postgres_data:
