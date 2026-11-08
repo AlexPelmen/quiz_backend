@@ -36,13 +36,44 @@ func TestNormalizeArtistNames(t *testing.T) {
 		{"Guns N' Roses", "Guns N’ Roses"},
 		{"Motorhead", "Motörhead"},
 		{"Maneskin", "Måneskin"},
+		{"H.E.A.T", "HEAT"},
+		{"Queen (Tribute)", "Queen"},
 	} {
 		if normalizeArtistName(names[0]) != normalizeArtistName(names[1]) {
 			t.Fatalf("варианты не совпали: %q и %q", names[0], names[1])
 		}
 	}
-	if normalizeArtistName("Queen (Tribute)") == normalizeArtistName("Queen") {
-		t.Fatal("название группы не должно совпадать с другой группой с уточнением")
+}
+
+func TestArtistSearchCompactFallback(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Query().Get("q") == "trustcompany" {
+			respondFixture(t, w, `{"response":{"hits":[{"result":{"primary_artist":{"id":322077,"name":"TRUSTcompany"}}}]}}`)
+			return
+		}
+		respondFixture(t, w, `{"response":{"hits":[]}}`)
+	}))
+	defer server.Close()
+	s := domain.DefaultSettings()
+	s.GeniusURL = server.URL
+	g := NewGenius(s, "test")
+	g.api.interval = 0
+	id, err := g.artistID(t.Context(), Lookup{Name: "Trust Company"})
+	if err != nil || id != 322077 {
+		t.Fatalf("ID=%d, ошибка: %v", id, err)
+	}
+}
+
+func TestArtistSearchRejectsAmbiguousParentheticalNames(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		respondFixture(t, w, `{"response":{"hits":[{"result":{"primary_artist":{"id":1,"name":"Dope (Band)"}}},{"result":{"primary_artist":{"id":2,"name":"Dope (Rapper)"}}}]}}`)
+	}))
+	defer server.Close()
+	s := domain.DefaultSettings()
+	s.GeniusURL = server.URL
+	g := NewGenius(s, "test")
+	if _, err := g.artistID(t.Context(), Lookup{Name: "Dope"}); err == nil || !strings.Contains(err.Error(), "несколько исполнителей") {
+		t.Fatal("одноимённые исполнители должны оставаться неоднозначными")
 	}
 }
 

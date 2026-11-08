@@ -80,6 +80,16 @@ func (g *Genius) artistID(ctx context.Context, lookup Lookup) (int64, error) {
 	}
 
 	if len(matches) == 0 {
+		query := compactArtistName(normalizeArtistName(lookup.Name))
+		if query != "" && !strings.EqualFold(query, strings.TrimSpace(lookup.Name)) {
+			matches, err = g.searchArtists(ctx, query, lookup.Name)
+			if err != nil {
+				return 0, err
+			}
+		}
+	}
+
+	if len(matches) == 0 {
 		return 0, fmt.Errorf("Genius: исполнитель %q не найден среди основных исполнителей найденных песен", lookup.Name)
 	}
 
@@ -96,7 +106,7 @@ func (g *Genius) artistID(ctx context.Context, lookup Lookup) (int64, error) {
 
 func (g *Genius) searchArtists(ctx context.Context, search, name string) (map[int64]bool, error) {
 	// Полное совпадение надёжнее совпадения по части имени.
-	matches := [4]map[int64]bool{{}, {}, {}, {}}
+	matches := [5]map[int64]bool{{}, {}, {}, {}, {}}
 
 	// Поиск Genius возвращает песни, поэтому исполнитель может появиться не сразу.
 	const searchPages = 5
@@ -128,10 +138,12 @@ func (g *Genius) searchArtists(ctx context.Context, search, name string) (map[in
 				matches[0][a.ID] = true
 			case normalizedName == normalizedQuery:
 				matches[1][a.ID] = true
-			case domain.TransliterateRussian(normalizedName) == domain.TransliterateRussian(normalizedQuery):
+			case normalizedQuery != "" && compactArtistName(normalizedName) == compactArtistName(normalizedQuery):
 				matches[2][a.ID] = true
-			case artistNameMatches(a.Name, name):
+			case domain.TransliterateRussian(normalizedName) == domain.TransliterateRussian(normalizedQuery):
 				matches[3][a.ID] = true
+			case artistNameMatches(a.Name, name):
+				matches[4][a.ID] = true
 			}
 		}
 
@@ -177,20 +189,23 @@ func containsArtistWords(name, query string) bool {
 }
 
 func normalizeArtistName(name string) string {
-	name = strings.TrimSpace(name)
-	// Genius дописывает транслитерацию: «КИНО (KINO)» или «Король и Шут (Korol I Shut)».
-	for i := strings.LastIndex(name, " ("); i >= 0 && strings.HasSuffix(name, ")"); i = strings.LastIndex(name, " (") {
-		alias := strings.TrimSuffix(name[i+2:], ")")
-		if alias != "" && (alias == strings.ToUpper(alias) || isLatinAlias(name[:i], alias)) {
-			name = name[:i]
-		} else {
-			break
+	var plain strings.Builder
+	depth := 0
+	for _, r := range name {
+		switch {
+		case r == '(':
+			depth++
+		case r == ')' && depth > 0:
+			depth--
+		case depth == 0:
+			plain.WriteRune(r)
 		}
 	}
+	name = plain.String()
 
 	name = norm.NFD.String(strings.ToLower(name))
 	name = strings.Map(func(r rune) rune {
-		if unicode.Is(unicode.Mn, r) {
+		if unicode.Is(unicode.Mn, r) || r == '.' {
 			return -1
 		}
 
@@ -204,22 +219,8 @@ func normalizeArtistName(name string) string {
 	return strings.Join(strings.Fields(name), " ")
 }
 
-func isLatinAlias(name, alias string) bool {
-	if !strings.ContainsFunc(name, func(r rune) bool { return unicode.Is(unicode.Cyrillic, r) }) {
-		return false
-	}
-
-	hasLatin := false
-	for _, r := range alias {
-		if unicode.IsLetter(r) {
-			if !unicode.Is(unicode.Latin, r) {
-				return false
-			}
-			hasLatin = true
-		}
-	}
-
-	return hasLatin
+func compactArtistName(name string) string {
+	return strings.Join(strings.Fields(name), "")
 }
 
 // Catalog получает альбомы, полные треклисты и до TrackLimit популярных песен.
