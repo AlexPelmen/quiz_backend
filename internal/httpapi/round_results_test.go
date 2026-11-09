@@ -27,8 +27,7 @@ func TestRoundResults(t *testing.T) {
 	}
 
 	// Альбомы по-прежнему участвуют в раунде обложек, хотя треки не привязаны к ним.
-	if _, err := pool.Exec(t.Context(), `UPDATE artists SET points=40;
-		UPDATE albums SET points=40; UPDATE tracks SET points=40,album_id=NULL;
+	if _, err := pool.Exec(t.Context(), `UPDATE tracks SET album_id=NULL;
 		INSERT INTO album_guessing(album_id,cover_download_id,approved,rectangles)
 		SELECT id,cover_download_id,true,'[]' FROM albums`); err != nil {
 		t.Fatal(err)
@@ -104,24 +103,24 @@ func assertRoundPopularity(t *testing.T, pool *pgxpool.Pool, router http.Handler
 
 	payload.Answers[first.ID], payload.Answers[last.ID] = true, false
 
-	assertQuestionPopularity(t, pool, expectedPopularity{round.Type, first, 46, 1})
-	assertQuestionPopularity(t, pool, expectedPopularity{round.Type, last, 36, 1})
+	assertQuestionPopularity(t, pool, expectedPopularity{round.Type, first, 1, 1})
+	assertQuestionPopularity(t, pool, expectedPopularity{round.Type, last, 0, 1})
 
-	call("PATCH", "/api/v1/settings", `{"min_popularity_delta":-1}`, 400)
-	call("PATCH", "/api/v1/settings", `{"k_popularity":10,"min_popularity_delta":2}`, 200)
+	call("PATCH", "/api/v1/settings", `{"quiz_guess_rate_asked_threshold":-1}`, 400)
+	call("PATCH", "/api/v1/settings", `{"quiz_guess_rate_enabled":false}`, 200)
 
 	payload.AttemptID = uuid.New()
 
 	post(204)
-	assertQuestionPopularity(t, pool, expectedPopularity{round.Type, first, 48, 2})
-	assertQuestionPopularity(t, pool, expectedPopularity{round.Type, last, 34, 2})
-	call("PATCH", "/api/v1/settings", `{"k_popularity":20,"min_popularity_delta":1}`, 200)
+	assertQuestionPopularity(t, pool, expectedPopularity{round.Type, first, 2, 2})
+	assertQuestionPopularity(t, pool, expectedPopularity{round.Type, last, 0, 2})
+	call("PATCH", "/api/v1/settings", `{"quiz_guess_rate_enabled":true}`, 200)
 }
 
 type expectedPopularity struct {
 	kind  string
 	q     domain.Question
-	want  float64
+	want  int
 	count int
 }
 
@@ -142,27 +141,27 @@ func assertQuestionPopularity(t *testing.T, pool *pgxpool.Pool, expected expecte
 	}
 
 	for _, table := range []string{"artists", "albums", "tracks"} {
-		sql := "SELECT points,guess_num FROM " + table + " WHERE artist_id=$1"
+		sql := "SELECT guessed,asked FROM catalog_" + table + " WHERE artist_id=$1"
 		if table == "artists" {
-			sql = "SELECT points,guess_num FROM artists WHERE id=$1"
+			sql = "SELECT guessed,asked FROM artists WHERE id=$1"
 		}
 
 		var (
-			points float64
-			shown  int
+			guessed int
+			shown   int
 		)
 
-		if err := pool.QueryRow(t.Context(), sql, q.ArtistID).Scan(&points, &shown); err != nil {
+		if err := pool.QueryRow(t.Context(), sql, q.ArtistID).Scan(&guessed, &shown); err != nil {
 			t.Fatal(err)
 		}
 
-		wantPoints, wantShown := 40.0, 0
+		wantGuessed, wantShown := 0, 0
 		if table == "artists" || (table == "tracks" && q.TrackID != nil) || (table == "albums" && albumID != nil) {
-			wantPoints, wantShown = expected.want, expected.count
+			wantGuessed, wantShown = expected.want, expected.count
 		}
 
-		if points != wantPoints || shown != wantShown {
-			t.Fatalf("%s: points=%v, guess_num=%d; ожидается %v и %d", table, points, shown, wantPoints, wantShown)
+		if guessed != wantGuessed || shown != wantShown {
+			t.Fatalf("%s: guessed=%d, asked=%d; ожидается %v и %d", table, guessed, shown, wantGuessed, wantShown)
 		}
 	}
 }

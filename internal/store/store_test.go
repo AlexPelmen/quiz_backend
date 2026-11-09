@@ -15,31 +15,6 @@ import (
 	"devkeeper.com/quiz/internal/testutil"
 )
 
-func TestRetryYouTubeOnlyErrors(t *testing.T) {
-	pool, uow := testutil.Database(t)
-	ctx := t.Context()
-	ids := []uuid.UUID{uuid.New(), uuid.New(), uuid.New(), uuid.New()}
-	_, err := pool.Exec(ctx, `INSERT INTO downloads(id,source_type,status,file_type,attempts,error) VALUES
-		($1,'youtube','errored','mp3',3,'failure'),($2,'youtube','finished','mp3',1,''),
-		($3,'image','errored','image',3,'failure'),($4,'youtube','manual','mp3',0,'')`, ids[0], ids[1], ids[2], ids[3])
-	if err != nil {
-		t.Fatal(err)
-	}
-	count, err := uow.Downloads.RetryYouTube(ctx)
-	if err != nil || count != 1 {
-		t.Fatalf("повторено %d, ошибка %v", count, err)
-	}
-	for i, want := range []string{"pending", "finished", "errored", "manual"} {
-		d, err := uow.Downloads.Get(ctx, ids[i])
-		if err != nil || d.Status != want {
-			t.Fatalf("загрузка %d: %+v, %v", i, d, err)
-		}
-		if i == 0 && (d.Attempts != 0 || d.Error != "") {
-			t.Fatalf("ошибка и попытки не сброшены: %+v", d)
-		}
-	}
-}
-
 func TestQuotaKeepsNewestObservation(t *testing.T) {
 	_, uow := testutil.Database(t)
 	ctx := t.Context()
@@ -68,13 +43,16 @@ func TestArtistsListNewestFirstAcrossPages(t *testing.T) {
 	pool, uow := testutil.Database(t)
 	ctx := t.Context()
 	ids := []uuid.UUID{uuid.New(), uuid.New(), uuid.New()}
+
 	for i, id := range ids {
-		_, err := pool.Exec(ctx, `INSERT INTO artists(id, name, tags, points, created_at)
-			VALUES ($1, $2, ARRAY['rock'], 100, $3)`, id, fmt.Sprintf("Исполнитель %d", i), time.Date(2020+i, 1, 1, 0, 0, 0, 0, time.UTC))
+		_, err := pool.Exec(ctx, `INSERT INTO artists(id, name, tags, created_at)
+			VALUES ($1, $2, ARRAY['rock'], $3)`,
+			id, fmt.Sprintf("Исполнитель %d", i), time.Date(2020+i, 1, 1, 0, 0, 0, 0, time.UTC))
 		if err != nil {
 			t.Fatal(err)
 		}
 	}
+
 	for page := range ids {
 		artists, err := uow.Artists.List(ctx, domain.Page{Limit: 1, Offset: page, Tag: "rock"})
 		if err != nil || len(artists) != 1 || artists[0].ID != ids[len(ids)-1-page] {
@@ -87,17 +65,21 @@ func TestTracksListNewestFirstAcrossPages(t *testing.T) {
 	pool, uow := testutil.Database(t)
 	ctx := t.Context()
 	artistID := uuid.New()
-	if _, err := uow.Artists.Create(ctx, domain.Artist{ID: artistID, Name: "Исполнитель", Tags: []string{}, Points: 100}); err != nil {
+
+	if _, err := uow.Artists.Create(ctx, domain.Artist{ID: artistID, Name: "Исполнитель", Tags: []string{}}); err != nil {
 		t.Fatal(err)
 	}
+
 	ids := []uuid.UUID{uuid.New(), uuid.New(), uuid.New()}
 	for i, id := range ids {
-		_, err := pool.Exec(ctx, `INSERT INTO tracks(id, name, artist_id, created_at)
-			VALUES ($1, $2, $3, $4)`, id, fmt.Sprintf("Трек %d", i), artistID, time.Date(2020+i, 1, 1, 0, 0, 0, 0, time.UTC))
+		_, err := pool.Exec(ctx, `WITH saved AS (INSERT INTO tracks(id,name,created_at) VALUES ($1,$2,$4) RETURNING id)
+            INSERT INTO artist_to_track(track_id,artist_id) SELECT id,$3 FROM saved`,
+			id, fmt.Sprintf("Трек %d", i), artistID, time.Date(2020+i, 1, 1, 0, 0, 0, 0, time.UTC))
 		if err != nil {
 			t.Fatal(err)
 		}
 	}
+
 	for page := range ids {
 		tracks, err := uow.Tracks.List(ctx, domain.Page{Limit: 1, Offset: page, ArtistID: &artistID})
 		if err != nil || len(tracks) != 1 || tracks[0].ID != ids[len(ids)-1-page] {
@@ -110,6 +92,7 @@ func TestDownloadsListNewestFirstAcrossPages(t *testing.T) {
 	pool, uow := testutil.Database(t)
 	ctx := t.Context()
 	ids := []uuid.UUID{uuid.New(), uuid.New(), uuid.New()}
+
 	for i, id := range ids {
 		_, err := pool.Exec(ctx, `INSERT INTO downloads(id, source_type, file_type, created_at)
 			VALUES ($1, 'mp3', 'mp3', $2)`, id, time.Date(2020+i, 1, 1, 0, 0, 0, 0, time.UTC))
@@ -117,8 +100,9 @@ func TestDownloadsListNewestFirstAcrossPages(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+
 	for page := range ids {
-		downloads, err := uow.Downloads.List(ctx, domain.Page{Limit: 1, Offset: page, Status: "pending"})
+		downloads, err := uow.Downloads.List(ctx, domain.Page{Limit: 1, Offset: page, Status: "created"})
 		if err != nil || len(downloads) != 1 || downloads[0].ID != ids[len(ids)-1-page] {
 			t.Fatalf("неверный порядок страницы %d: %+v, ошибка: %v", page, downloads, err)
 		}
@@ -135,7 +119,8 @@ func TestSourceRetrySettingsMigration(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	sql := "DELETE FROM schema_migrations WHERE version='002_source_retry_settings.sql'"
+	sql := `DELETE FROM schema_migrations
+		WHERE version IN ('002_source_retry_settings.sql','016_short_source_retries.sql')`
 	if _, err := pool.Exec(ctx, sql); err != nil {
 		t.Fatal(err)
 	}
@@ -155,7 +140,8 @@ func TestSourceRetrySettingsMigration(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if s.Source429Retries != 7 || s.Source429DelaySeconds != 30 || s.GeniusRequestIntervalMS != 1000 {
+	if s.Source429Retries != 7 || s.Source429DelaySeconds != 1 ||
+		s.Source429MaxDelaySeconds != 3 || s.GeniusRequestIntervalMS != 1000 {
 		t.Fatalf("миграция потеряла настройки: %+v", s)
 	}
 }
@@ -166,7 +152,7 @@ func TestTransactionsAndQueue(t *testing.T) {
 	artistID := uuid.New()
 	wantErr := errors.New("откат")
 	err := uow.Transaction(ctx, func(tx *store.UnitOfWork) error {
-		_, err := tx.Artists.Create(ctx, domain.Artist{ID: artistID, Name: "Откат", Tags: []string{}, Points: 100})
+		_, err := tx.Artists.Create(ctx, domain.Artist{ID: artistID, Name: "Откат", Tags: []string{}})
 		if err != nil {
 			return err
 		}
@@ -198,6 +184,14 @@ func TestTransactionsAndQueue(t *testing.T) {
 		t.Fatalf("дубликат загрузки: %v", err)
 	}
 
+	if _, err := uow.Downloads.Claim(ctx, 60); !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("не запущенная задача захвачена: %v", err)
+	}
+
+	if _, err := uow.Downloads.Retry(ctx, d); err != nil {
+		t.Fatal(err)
+	}
+
 	claimed, err := uow.Downloads.Claim(ctx, 60)
 	if err != nil || claimed.ID != d.ID || claimed.Attempts != 1 {
 		t.Fatalf("захват: %+v %v", claimed, err)
@@ -226,7 +220,7 @@ func TestWeightedSelection(t *testing.T) {
 	counts := map[uuid.UUID]int{}
 
 	for range 200 {
-		c, err := uow.Packs.Pick(ctx, []uuid.UUID{}, store.PickFilter{Kind: "artist_by_track"})
+		c, err := uow.Packs.Pick(ctx, []uuid.UUID{}, store.PickFilter{Kind: "artist_by_track", Center: 0.2})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -238,7 +232,7 @@ func TestWeightedSelection(t *testing.T) {
 		t.Fatalf("выбор не учитывает веса: %v", counts)
 	}
 
-	selected, err := uow.Packs.Pick(ctx, []uuid.UUID{high}, store.PickFilter{Kind: "artist_by_track"})
+	selected, err := uow.Packs.Pick(ctx, []uuid.UUID{high}, store.PickFilter{Kind: "artist_by_track", Center: 0.2})
 	if err != nil || selected.Artist.ID != low {
 		t.Fatalf("не исключён исполнитель: %v", err)
 	}
@@ -248,7 +242,55 @@ func TestWeightedSelection(t *testing.T) {
 	}
 }
 
-func seedCandidate(t *testing.T, pool *pgxpool.Pool, points int) uuid.UUID {
+func TestGuessRateThreshold(t *testing.T) {
+	pool, uow := testutil.Database(t)
+	ctx := t.Context()
+	high := seedCandidate(t, pool, 100)
+
+	low := seedCandidate(t, pool, 1)
+	if _, err := pool.Exec(ctx, "UPDATE artists SET asked=6,guessed=3 WHERE id=$1", low); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, scenario := range []struct {
+		name    string
+		asked   int
+		enabled bool
+		want    uuid.UUID
+	}{
+		{"at threshold", 5, true, high},
+		{"above threshold", 6, true, low},
+		{"disabled", 6, false, high},
+	} {
+		t.Run(scenario.name, func(t *testing.T) {
+			if _, err := pool.Exec(ctx, "UPDATE artists SET asked=$2 WHERE id=$1", high, scenario.asked); err != nil {
+				t.Fatal(err)
+			}
+
+			filter := store.PickFilter{
+				Kind: "artist_by_track", Center: 0.2, GuessRateEnabled: scenario.enabled, AskedThreshold: 5,
+			}
+			count := 0
+
+			for range 30 {
+				pick, err := uow.Packs.Pick(ctx, []uuid.UUID{}, filter)
+				if err != nil {
+					t.Fatal(err)
+				}
+
+				if pick.Artist.ID == scenario.want {
+					count++
+				}
+			}
+
+			if count < 25 {
+				t.Fatalf("ожидаемый исполнитель выбран %d из 30 раз", count)
+			}
+		})
+	}
+}
+
+func seedCandidate(t *testing.T, pool *pgxpool.Pool, plays int) uuid.UUID {
 	t.Helper()
 
 	a, al, tr, d := uuid.New(), uuid.New(), uuid.New(), uuid.New()
@@ -261,9 +303,17 @@ func seedCandidate(t *testing.T, pool *pgxpool.Pool, points int) uuid.UUID {
 			"INSERT INTO downloads(id,source_type,status,file_type,meta) VALUES($1,'mp3','finished','mp3',$2)",
 			[]any{d, map[string]any{"duration_seconds": 60}},
 		},
-		{"INSERT INTO artists(id,name,status,points) VALUES($1,$2,'parsed',$3)", []any{a, a.String(), points}},
-		{"INSERT INTO albums(id,name,artist_id) VALUES($1,'Альбом',$2)", []any{al, a}},
-		{"INSERT INTO tracks(id,name,artist_id,album_id) VALUES($1,'Трек',$2,$3)", []any{tr, a, al}},
+		{"INSERT INTO artists(id,name,status,yt_plays) VALUES($1,$2,'parsed',$3)", []any{a, a.String(), plays}},
+		{
+			`WITH saved AS (INSERT INTO albums(id,name) VALUES($1,'Альбом') RETURNING id)
+                INSERT INTO artist_to_album(album_id,artist_id) SELECT id,$2 FROM saved`,
+			[]any{al, a},
+		},
+		{
+			`WITH saved AS (INSERT INTO tracks(id,name,album_id) VALUES($1,'Трек',$3) RETURNING id)
+                INSERT INTO artist_to_track(track_id,artist_id) SELECT id,$2 FROM saved`,
+			[]any{tr, a, al},
+		},
 		{"INSERT INTO track_to_download VALUES($1,$2)", []any{tr, d}},
 	}
 
@@ -281,11 +331,11 @@ func assertZeroExcludes(t *testing.T, pool *pgxpool.Pool, uow *store.UnitOfWork,
 
 	err := uow.Transaction(t.Context(), func(tx *store.UnitOfWork) error {
 		// Отдельный пул используется только для настройки сценария; транзакция выбора видит завершённую запись.
-		if _, err := pool.Exec(t.Context(), fmt.Sprintf("UPDATE %s SET points=0", table)); err != nil {
+		if _, err := pool.Exec(t.Context(), fmt.Sprintf("UPDATE %s SET excluded_from_quiz=true", table)); err != nil {
 			return err
 		}
 
-		_, err := tx.Packs.Pick(t.Context(), []uuid.UUID{}, store.PickFilter{Kind: "artist_by_track"})
+		_, err := tx.Packs.Pick(t.Context(), []uuid.UUID{}, store.PickFilter{Kind: "artist_by_track", Center: 0.2})
 		if !errors.Is(err, domain.ErrNotFound) {
 			return fmt.Errorf("нуль в %s не исключает данные: %w", table, err)
 		}
@@ -296,7 +346,8 @@ func assertZeroExcludes(t *testing.T, pool *pgxpool.Pool, uow *store.UnitOfWork,
 		t.Fatal(err)
 	}
 
-	if _, err := pool.Exec(context.Background(), fmt.Sprintf("UPDATE %s SET points=100", table)); err != nil {
+	reset := fmt.Sprintf("UPDATE %s SET excluded_from_quiz=false", table)
+	if _, err := pool.Exec(context.Background(), reset); err != nil {
 		t.Fatal(err)
 	}
 }

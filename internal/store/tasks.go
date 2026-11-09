@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"encoding/json"
 
 	"github.com/google/uuid"
 
@@ -20,9 +21,15 @@ func (r SettingsRepository) Seed(ctx context.Context) error {
 
 // Get читает текущую конфигурацию.
 func (r SettingsRepository) Get(ctx context.Context) (domain.Settings, error) {
-	var s domain.Settings
+	s := domain.DefaultSettings()
 
-	err := r.db.QueryRow(ctx, "SELECT value FROM settings WHERE id=true").Scan(&s)
+	var data []byte
+
+	if err := r.db.QueryRow(ctx, "SELECT value FROM settings WHERE id=true").Scan(&data); err != nil {
+		return s, err
+	}
+
+	err := json.Unmarshal(data, &s)
 
 	return s, err
 }
@@ -87,7 +94,9 @@ type DownloadRepository struct{ db DB }
 // ImageIsArtist сообщает, используется ли изображение исполнителем.
 func (r DownloadRepository) ImageIsArtist(ctx context.Context, id uuid.UUID) (bool, error) {
 	var isArtist bool
+
 	err := r.db.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM artists WHERE logo_download_id=$1)`, id).Scan(&isArtist)
+
 	return isArtist, err
 }
 
@@ -130,7 +139,7 @@ func (r DownloadRepository) List(ctx context.Context, p domain.Page) ([]domain.D
 func (r DownloadRepository) Claim(ctx context.Context, seconds int) (domain.Download, error) {
 	return one[domain.Download](ctx, r.db, `UPDATE downloads SET status='processing',attempts=attempts+1,
 		lease_until=now()+make_interval(secs=>$1),updated_at=now() WHERE id=(
-		SELECT id FROM downloads WHERE (status IN ('created','pending') AND next_attempt_at<=now())
+		SELECT id FROM downloads WHERE (status='pending' AND next_attempt_at<=now())
 		OR (status='processing' AND lease_until<now())
 		ORDER BY created_at FOR UPDATE SKIP LOCKED LIMIT 1) RETURNING *`, []any{seconds})
 }
@@ -138,24 +147,70 @@ func (r DownloadRepository) Claim(ctx context.Context, seconds int) (domain.Down
 // Finish сохраняет результат либо следующую попытку загрузки.
 func (r DownloadRepository) Finish(ctx context.Context, d domain.Download) error {
 	return execute(ctx, r.db, `UPDATE downloads SET status=$2,uri=$3,meta=$4,error=$5,
-		lease_until=NULL,next_attempt_at=now()+make_interval(secs=>$6),file_type=$8,updated_at=now()
+		lease_until=NULL,next_attempt_at=now()+make_interval(secs=>$6),file_type=$8,preview=$9,updated_at=now()
 		WHERE id=$1 AND attempts=$7 AND status='processing'`,
-		[]any{d.ID, d.Status, d.URI, d.Meta, d.Error, d.Attempts * d.Attempts * 5, d.Attempts, d.FileType})
+		[]any{d.ID, d.Status, d.URI, d.Meta, d.Error, d.Attempts * d.Attempts * 5, d.Attempts, d.FileType, d.Preview})
 }
 
 // Retry повторяет ошибочную задачу либо назначает источник ручной задаче.
 func (r DownloadRepository) Retry(ctx context.Context, d domain.Download) (domain.Download, error) {
 	return one[domain.Download](ctx, r.db, `UPDATE downloads SET source_type=$2,source_uri=$3,
-		status='pending',attempts=0,error='',next_attempt_at=now(),updated_at=now()
-		WHERE id=$1 AND status IN ('errored','manual') RETURNING *`, []any{d.ID, d.SourceType, d.SourceURI})
+		downloader='direct',preview=false,status='pending',attempts=0,error='',next_attempt_at=now(),updated_at=now()
+		WHERE id=$1 AND status IN ('created','errored','manual') RETURNING *`, []any{d.ID, d.SourceType, d.SourceURI})
 }
 
-// RetryYouTube возвращает ошибочные загрузки YouTube в очередь.
-func (r DownloadRepository) RetryYouTube(ctx context.Context) (int64, error) {
-	result, err := r.db.Exec(ctx, `UPDATE downloads SET status='pending',attempts=0,error='',
-		next_attempt_at=now(),lease_until=NULL,updated_at=now() WHERE status='errored' AND source_type='youtube'`)
+// Start ставит выбранные задания в очередь. Вызывается внутри транзакции.
+func (r DownloadRepository) Start(ctx context.Context, downloader string, ids []uuid.UUID) (int64, error) {
+	// Захватываем строки по ID, чтобы пересекающиеся запуски брали блокировки в одном порядке.
+	result, err := r.db.Exec(ctx, `WITH ready AS (
+        SELECT id FROM downloads WHERE id=ANY($1::uuid[]) AND status IN ('created','errored','manual')
+        AND CASE WHEN $2='image' THEN source_type='image' AND source_uri<>''
+            ELSE file_type='mp3' AND EXISTS(SELECT 1 FROM track_to_download WHERE download_id=downloads.id) END
+        ORDER BY id FOR UPDATE
+    ) UPDATE downloads SET status='pending',downloader=$2,preview=false,attempts=0,error='',
+        next_attempt_at=now(),lease_until=NULL,updated_at=now() WHERE id IN (SELECT id FROM ready)`, ids, downloader)
 	if err != nil {
 		return 0, translate(err)
 	}
+
+	if result.RowsAffected() != int64(len(ids)) {
+		return 0, domain.ErrConflict
+	}
+
 	return result.RowsAffected(), nil
+}
+
+// TrackIDs возвращает треки, связанные с задачей.
+func (r DownloadRepository) TrackIDs(ctx context.Context, id uuid.UUID) ([]uuid.UUID, error) {
+	rows, err := query[struct{ TrackID uuid.UUID }](ctx, r.db,
+		"SELECT track_id FROM track_to_download WHERE download_id=$1 ORDER BY track_id", []any{id})
+	if err != nil {
+		return nil, err
+	}
+
+	ids := make([]uuid.UUID, 0, len(rows))
+	for _, row := range rows {
+		ids = append(ids, row.TrackID)
+	}
+
+	return ids, nil
+}
+
+// HasAudioJob проверяет, есть ли готовая запись или существующее задание трека.
+func (r DownloadRepository) HasAudioJob(ctx context.Context, id uuid.UUID) (bool, error) {
+	var exists bool
+
+	err := r.db.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM track_to_download td JOIN downloads d ON d.id=td.download_id
+        WHERE td.track_id=$1 AND d.file_type='mp3')`, id).Scan(&exists)
+
+	return exists, err
+}
+
+// FillTrackDuration восстанавливает длительность, если у трека её ещё нет.
+func (r DownloadRepository) FillTrackDuration(ctx context.Context, id uuid.UUID, seconds int) error {
+	_, err := r.db.Exec(ctx, `UPDATE tracks SET duration_seconds=$2,updated_at=now()
+        WHERE duration_seconds IS NULL
+            AND id IN (SELECT track_id FROM track_to_download WHERE download_id=$1)`, id, seconds)
+
+	return translate(err)
 }

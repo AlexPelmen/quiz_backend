@@ -9,33 +9,59 @@ type CatalogSource interface {
 
 // Lookup задаёт исполнителя и лимит отдельных треков.
 type Lookup struct {
-	Name       string
-	GeniusID   *int64
-	TrackLimit int
+	Name         string
+	GeniusID     *int64
+	TrackLimit   int
+	Base         Catalog
+	NeedArtist   bool
+	StudioGroups []Album
 }
 
 // Catalog содержит подготовленные сведения источника.
 type Catalog struct {
-	ArtistID int64
-	Name     string
-	LogoURL  string
-	Albums   []Album
-	Tracks   []Song
-	Warnings []string
+	AlbumsRanked     bool     `json:"albums_ranked"`
+	RankedAlbumIDs   []string `json:"-"`
+	TopSongs         []Song   `json:"top_songs"`
+	TopSongsPlaylist string   `json:"top_songs_playlist"`
+	ArtistID         int64    `json:"genius_id"`
+	YTMusicID        *string  `json:"yt_music_id"`
+	YtPlays          *int64   `json:"yt_plays"`
+	YtSubs           *int64   `json:"yt_subs"`
+	Name             string   `json:"name"`
+	LogoURL          string   `json:"logo_url"`
+	Albums           []Album  `json:"albums"`
+	Tracks           []Song   `json:"tracks"`
+	Warnings         []string `json:"warnings"`
 }
 
-// Album содержит полный CSV-треклист и метаданные альбома Genius.
+// Album содержит метаданные релиза и необязательный сохранённый треклист.
 type Album struct {
-	ID          int64  `json:"id"`
-	Name        string `json:"name"`
-	CoverURL    string `json:"cover_art_url"`
-	ReleaseDate string `json:"release_date"`
-	TrackList   string
-	Complete    bool
+	HasCover      bool    `json:"-"`
+	SkipPlays     bool    `json:"-"`
+	Type          string  `json:"type"`
+	YTMusicID     *string `json:"yt_music_id"`
+	MusicBrainzID string  `json:"music_brainz_id"`
+	YtPlays       *int64  `json:"yt_plays"`
+	ID            int64   `json:"id"`
+	Name          string  `json:"name"`
+	CoverURL      string  `json:"cover_art_url"`
+	ReleaseDate   string  `json:"release_date"`
+	TrackList     string  `json:"track_list"`
+	Complete      bool    `json:"complete"`
 }
 
 // Song описывает сведения песни и доступные источники записи.
 type Song struct {
+	YTMusicID     *string `json:"yt_music_id"`
+	MusicBrainzID string  `json:"music_brainz_id"`
+	YtPlays       *int64  `json:"yt_plays"`
+	URL           string  `json:"url"`
+	PreviewURL    string  `json:"preview_url"`
+	Duration      *int    `json:"duration_seconds"`
+	PrimaryArtist struct {
+		Name string `json:"name"`
+	} `json:"primary_artist"`
+
 	ID         int64  `json:"id"`
 	Title      string `json:"title"`
 	Album      *Album `json:"album"`
@@ -49,8 +75,9 @@ type Song struct {
 
 // Enrichment содержит необязательные структурированные сведения MusicBrainz.
 type Enrichment struct {
-	ID       string
-	FullName string
-	Country  string
-	Members  []string
+	ID           string
+	FullName     string
+	Country      string
+	Members      []string
+	MembersKnown bool
 }

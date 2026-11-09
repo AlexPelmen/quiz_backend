@@ -18,6 +18,8 @@ import (
 
 	"github.com/google/uuid"
 
+	"devkeeper.com/quiz/internal/store"
+
 	"devkeeper.com/quiz/internal/domain"
 )
 
@@ -131,7 +133,8 @@ func downloadYouTube(ctx context.Context, s domain.Settings, d domain.Download, 
 	}
 
 	host := strings.ToLower(u.Hostname())
-	if host != "youtube.com" && host != "www.youtube.com" && host != "m.youtube.com" && host != "youtu.be" {
+	if host != "music.youtube.com" && host != "youtube.com" && host != "www.youtube.com" &&
+		host != "m.youtube.com" && host != "youtu.be" {
 		return fmt.Errorf("%w: неподдерживаемый хост YouTube", domain.ErrInvalid)
 	}
 
@@ -141,33 +144,75 @@ func downloadYouTube(ctx context.Context, s domain.Settings, d domain.Download, 
 		"--max-filesize", strconv.FormatInt(s.MaxDownloadBytes, 10),
 		"--format", "bestaudio/best", "--output", path,
 	}
+
 	if cookiePath := os.Getenv("YTDLP_COOKIES_FILE"); cookiePath != "" {
 		input, openErr := os.Open(cookiePath)
 		if openErr != nil {
 			return fmt.Errorf("открыть cookies yt-dlp: %w", openErr)
 		}
+
 		defer func() { result = errors.Join(result, input.Close()) }()
+
 		copyFile, createErr := os.CreateTemp(filepath.Dir(path), ".cookies-*")
 		if createErr != nil {
 			return fmt.Errorf("создать временные cookies yt-dlp: %w", createErr)
 		}
+
 		if _, copyErr := io.Copy(copyFile, input); copyErr != nil {
 			return errors.Join(fmt.Errorf("скопировать cookies yt-dlp: %w", copyErr), copyFile.Close())
 		}
+
 		if closeErr := copyFile.Close(); closeErr != nil {
 			return closeErr
 		}
+
 		args = append(args, "--cookies", copyFile.Name())
 	}
+
 	args = append(args, "--", d.SourceURI)
 	_, err = runCommand(ctx, s.YTDLP, args)
 
 	return err
 }
 
-// RetryYouTubeDownloads возвращает ошибочные загрузки YouTube в очередь.
-func (a *App) RetryYouTubeDownloads(ctx context.Context) (int64, error) {
-	return a.uow.Downloads.RetryYouTube(ctx)
+// StartDownloadsForm задаёт загрузчик и точный список выбранных заданий.
+type StartDownloadsForm struct {
+	Downloader  string      `json:"downloader"`
+	DownloadIDs []uuid.UUID `json:"download_ids"`
+}
+
+// StartDownloads запускает только выбранные задания одного загрузчика.
+func (a *App) StartDownloads(ctx context.Context, f StartDownloadsForm) (int64, error) {
+	switch f.Downloader {
+	case "yt_music", "hitmo", "genius_youtube", "genius_short", "image":
+	default:
+		return 0, fmt.Errorf("%w: неизвестный загрузчик", domain.ErrInvalid)
+	}
+
+	if len(f.DownloadIDs) == 0 || len(f.DownloadIDs) > 200 {
+		return 0, fmt.Errorf("%w: выберите от 1 до 200 заданий", domain.ErrInvalid)
+	}
+
+	seen := make(map[uuid.UUID]bool, len(f.DownloadIDs))
+	for _, id := range f.DownloadIDs {
+		if id == uuid.Nil || seen[id] {
+			return 0, fmt.Errorf("%w: ID заданий должны быть уникальными", domain.ErrInvalid)
+		}
+
+		seen[id] = true
+	}
+
+	var count int64
+
+	err := a.uow.Transaction(ctx, func(tx *store.UnitOfWork) error {
+		var err error
+
+		count, err = tx.Downloads.Start(ctx, f.Downloader, f.DownloadIDs)
+
+		return err
+	})
+
+	return count, err
 }
 
 func tagValue(meta map[string]any, key string) string {
@@ -230,6 +275,15 @@ func downloadFile(ctx context.Context, s domain.Settings, d *domain.Download, di
 			return err
 		}
 
+		if d.Downloader == "hitmo" {
+			expected, ok := d.Meta["expected_duration_seconds"].(int)
+			if !ok || math.Abs(math.Round(duration)-float64(expected)) > 1 {
+				return fmt.Errorf("%w: длительность скачанного файла Hitmo не совпала", domain.ErrInvalid)
+			}
+
+			delete(d.Meta, "expected_duration_seconds")
+		}
+
 		d.Meta["duration_seconds"] = duration
 		input = d.URI
 	} else {
@@ -249,6 +303,7 @@ func downloadFile(ctx context.Context, s domain.Settings, d *domain.Download, di
 	if err := os.MkdirAll(targetDir, 0o750); err != nil {
 		return err
 	}
+
 	path := filepath.Join(targetDir, d.ID.String()+"."+d.FileType)
 	if err := os.Rename(input, path); err != nil {
 		return err
@@ -408,8 +463,12 @@ func (a *App) RetryDownload(ctx context.Context, id uuid.UUID, f DownloadForm) (
 		return d, err
 	}
 
-	if d.Status != "manual" && d.Status != "errored" {
+	if d.Status != "manual" && d.Status != "errored" && d.Status != "created" {
 		return d, domain.ErrConflict
+	}
+
+	if f.SourceURI == "" && d.Downloader != "" && d.Downloader != "direct" {
+		return d, fmt.Errorf("%w: выберите загрузчик на странице загрузок или укажите прямую ссылку", domain.ErrInvalid)
 	}
 
 	if f.SourceType != "" {

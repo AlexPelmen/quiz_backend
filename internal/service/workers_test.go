@@ -21,46 +21,6 @@ type catalogFixture struct{}
 
 type failingCatalog struct{}
 
-type timeoutCatalog struct{ calls int }
-
-func (c *timeoutCatalog) Catalog(context.Context, source.Lookup) (source.Catalog, error) {
-	c.calls++
-	return source.Catalog{}, context.DeadlineExceeded
-}
-
-func TestParsingTimeoutRetries(t *testing.T) {
-	pool, uow := testutil.Database(t)
-	ctx := t.Context()
-	app := New(uow, slog.New(slog.NewTextHandler(io.Discard, nil)), "test")
-	id := uuid.New()
-	if _, err := pool.Exec(ctx, `INSERT INTO artists(id,name) VALUES ($1,'Исполнитель')`, id); err != nil {
-		t.Fatal(err)
-	}
-	run, err := uow.Runs.Create(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
-	run, err = uow.Runs.Claim(ctx, 60)
-	if err != nil {
-		t.Fatal(err)
-	}
-	artist, err := uow.Artists.Claim(ctx, 60, run.CreatedAt)
-	if err != nil {
-		t.Fatal(err)
-	}
-	src := &timeoutCatalog{}
-	err = app.parseArtistWithRetry(ctx, &run, artist, parseDependencies{Settings: domain.DefaultSettings(), Source: src}, 0)
-	if !errors.Is(err, context.DeadlineExceeded) || src.calls != 4 {
-		t.Fatalf("ожидались три повтора: попыток %d, ошибка %v", src.calls, err)
-	}
-	if _, err := uow.Runs.Stop(ctx, run.ID); err != nil {
-		t.Fatal(err)
-	}
-	if err := app.waitParseRetry(ctx, &run, artist.ID, domain.DefaultSettings(), time.Minute); !errors.Is(err, errParsingStopped) {
-		t.Fatalf("ожидалась остановка во время паузы: %v", err)
-	}
-}
-
 type stoppingCatalog struct {
 	stop func() error
 }
@@ -69,6 +29,7 @@ func (c stoppingCatalog) Catalog(context.Context, source.Lookup) (source.Catalog
 	if err := c.stop(); err != nil {
 		return source.Catalog{}, err
 	}
+
 	return source.Catalog{}, errors.New("ошибка текущего исполнителя")
 }
 
@@ -76,18 +37,22 @@ func TestStopParsingAfterCurrentArtist(t *testing.T) {
 	pool, uow := testutil.Database(t)
 	ctx := t.Context()
 	app := New(uow, slog.New(slog.NewTextHandler(io.Discard, nil)), "test")
+
 	_, err := pool.Exec(ctx, `INSERT INTO artists(id,name) VALUES ($1,'Первый'),($2,'Второй')`, uuid.New(), uuid.New())
 	if err != nil {
 		t.Fatal(err)
 	}
+
 	run, err := uow.Runs.Create(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
+
 	run, err = uow.Runs.Claim(ctx, 60)
 	if err != nil {
 		t.Fatal(err)
 	}
+
 	deps := parseDependencies{Settings: domain.DefaultSettings(), Source: stoppingCatalog{stop: func() error {
 		_, err := uow.Runs.Stop(ctx, run.ID)
 		return err
@@ -95,14 +60,17 @@ func TestStopParsingAfterCurrentArtist(t *testing.T) {
 	if err := app.processRun(ctx, &run, deps); err != nil {
 		t.Fatal(err)
 	}
+
 	run.Status = "finished"
 	if err := uow.Runs.Finish(ctx, run); err != nil {
 		t.Fatal(err)
 	}
+
 	saved, err := uow.Runs.Get(ctx, run.ID)
-	if err != nil || saved.Status != "stopped" || saved.Processed != 1 || saved.Failed != 1 {
+	if err != nil || saved.Status != "stopped" || saved.Processed != 1 || saved.Failed != 0 {
 		t.Fatalf("неверный результат остановки: %+v, %v", saved, err)
 	}
+
 	var remaining int
 	if err := pool.QueryRow(ctx, `SELECT count(*) FROM artists WHERE status='created'`).Scan(&remaining); err != nil || remaining != 1 {
 		t.Fatalf("следующий исполнитель не остался в очереди: %d, %v", remaining, err)
@@ -113,7 +81,7 @@ func (failingCatalog) Catalog(context.Context, source.Lookup) (source.Catalog, e
 	return source.Catalog{}, errors.New("источник не нашёл исполнителя")
 }
 
-func TestFailedArtistsRetriedOncePerRun(t *testing.T) {
+func TestUnavailableCatalogMovesToManual(t *testing.T) {
 	pool, uow := testutil.Database(t)
 	app := New(uow, slog.New(slog.NewTextHandler(io.Discard, nil)), "test")
 	ctx := t.Context()
@@ -125,7 +93,7 @@ func TestFailedArtistsRetriedOncePerRun(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	for range 2 {
+	for attempt := range 2 {
 		run, err := uow.Runs.Create(ctx)
 		if err != nil {
 			t.Fatal(err)
@@ -136,7 +104,7 @@ func TestFailedArtistsRetriedOncePerRun(t *testing.T) {
 
 		cancel()
 
-		if err != nil || run.Processed != 1 || run.Failed != 1 {
+		if err != nil || run.Processed != 1-attempt || run.Failed != 0 {
 			t.Fatalf("исполнитель не обработан ровно один раз: %+v, %v", run, err)
 		}
 
@@ -167,7 +135,7 @@ func TestParserPersistsUnavailableTrack(t *testing.T) {
 
 	artist, err := uow.Artists.Create(t.Context(), domain.Artist{
 		ID: uuid.New(), Name: "Группа",
-		Points: 65, Tags: []string{"рок"},
+		ExcludedFromQuiz: true, Tags: []string{"рок"},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -202,17 +170,17 @@ func TestParserPersistsUnavailableTrack(t *testing.T) {
 		t.Fatalf("полный треклист потерян: %+v, %v", albums, err)
 	}
 
-	if err := app.downloadNext(t.Context(), s); err != nil {
+	if err := app.downloadNext(t.Context(), s); !errors.Is(err, domain.ErrNotFound) {
 		t.Fatal(err)
 	}
 
 	downloads, err := uow.Downloads.List(t.Context(), domain.Page{Limit: 50})
-	if err != nil || len(downloads) != 1 || downloads[0].Status != "manual" {
-		t.Fatalf("не создана задача manual: %+v, %v", downloads, err)
+	if err != nil || len(downloads) != 1 || downloads[0].Status != "created" {
+		t.Fatalf("не создана задача, ожидающая запуска: %+v, %v", downloads, err)
 	}
 
 	saved, err := uow.Artists.Get(t.Context(), artist.ID)
-	if err != nil || saved.Points != 65 || saved.Status != "parsed" || len(saved.Tags) != 1 {
+	if err != nil || !saved.ExcludedFromQuiz || saved.Status != "manual" || len(saved.Tags) != 1 {
 		t.Fatalf("пользовательские поля потеряны: %+v, %v", saved, err)
 	}
 

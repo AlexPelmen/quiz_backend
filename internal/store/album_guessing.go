@@ -28,10 +28,10 @@ func (r AlbumRepository) GuessingList(
 
 	return query[domain.AlbumGuessing](ctx, r.db, `
 		SELECT album_id,album_name,artist_name,cover_download_id,status,rectangles FROM (
-		SELECT al.id AS album_id, al.artist_id, al.name AS album_name, a.name AS artist_name, d.id AS cover_download_id,
+		SELECT al.id AS album_id, owner.artist_id, al.name AS album_name, a.name AS artist_name, d.id AS cover_download_id,
 			CASE WHEN g.approved THEN 'approved' WHEN g.approved=false THEN 'rejected' ELSE 'pending' END AS status,
 			COALESCE(g.rectangles,'[]'::jsonb) AS rectangles
-		FROM albums al JOIN artists a ON a.id=al.artist_id
+		FROM albums al JOIN artist_to_album owner ON owner.album_id=al.id JOIN artists a ON a.id=owner.artist_id
 		JOIN downloads d ON d.id=al.cover_download_id AND d.status='finished'
 		LEFT JOIN album_guessing g ON g.album_id=al.id AND g.cover_download_id=d.id
 	) covers WHERE ($1='' OR status=$1) ORDER BY `+order+` LIMIT $2 OFFSET $3`, args)

@@ -5,7 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
-	"net/url"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -85,7 +85,7 @@ func (a *App) downloadNext(ctx context.Context, s domain.Settings) error {
 		d.Meta = map[string]any{}
 	}
 
-	if d.SourceType == "unknown" {
+	if d.SourceType == "unknown" && d.Downloader == "" {
 		d.Status = "manual"
 		return a.uow.Downloads.Finish(ctx, d)
 	}
@@ -94,6 +94,7 @@ func (a *App) downloadNext(ctx context.Context, s domain.Settings) error {
 	defer cancel()
 
 	directory := "music/tracks"
+
 	if d.SourceType == "image" {
 		isArtist, lookupErr := a.uow.Downloads.ImageIsArtist(taskCtx, d.ID)
 		if lookupErr != nil {
@@ -104,8 +105,15 @@ func (a *App) downloadNext(ctx context.Context, s domain.Settings) error {
 			directory = "images/albums"
 		}
 	}
+
 	if err == nil {
-		err = downloadFile(taskCtx, s, &d, directory)
+		var resolved domain.Download
+
+		resolved, err = a.resolveAudio(taskCtx, s, d)
+		if err == nil {
+			err = downloadFile(taskCtx, s, &resolved, directory)
+			d.URI, d.Meta, d.Preview, d.FileType = resolved.URI, resolved.Meta, resolved.Preview, resolved.FileType
+		}
 	}
 
 	if ctx.Err() != nil {
@@ -113,17 +121,33 @@ func (a *App) downloadNext(ctx context.Context, s domain.Settings) error {
 		return ctx.Err()
 	}
 
-	d.Status = "finished"
+	d.Status, d.Error = "finished", ""
 	if err != nil {
 		d.URI, d.Error, d.Status = "", err.Error(), "pending"
-		if d.Attempts >= 3 {
+
+		var httpErr *source.HTTPError
+
+		permanent := errors.Is(err, domain.ErrInvalid) || errors.Is(err, domain.ErrNotFound) ||
+			(errors.As(err, &httpErr) && (httpErr.Status == 403 || httpErr.Status == 404))
+		if d.Attempts >= 3 || permanent {
 			d.Status = "errored"
 		}
 
 		a.log.Warn("ошибка скачивания", "download_id", d.ID, "attempt", d.Attempts, "error", err)
 	}
 
-	return a.uow.Downloads.Finish(ctx, d)
+	seconds, ok := d.Meta["duration_seconds"].(float64)
+	if d.Status != "finished" || d.FileType != "mp3" || d.Preview || !ok || seconds > math.MaxInt32 {
+		return a.uow.Downloads.Finish(ctx, d)
+	}
+
+	return a.uow.Transaction(ctx, func(tx *store.UnitOfWork) error {
+		if err := tx.Downloads.Finish(ctx, d); err != nil {
+			return err
+		}
+
+		return tx.Downloads.FillTrackDuration(ctx, d.ID, max(1, int(math.Round(seconds))))
+	})
 }
 
 func (a *App) parseNext(ctx context.Context, s domain.Settings) error {
@@ -132,11 +156,22 @@ func (a *App) parseNext(ctx context.Context, s domain.Settings) error {
 		return err
 	}
 
-	genius := source.NewGenius(s, a.token)
-	genius.SetQuotaObserver(a.uow.Quota.Save)
+	deps := parseDependencies{
+		Settings: s, YouTubeMusic: source.YTMusicCatalog, ResolveTracks: source.YTMusicTracks,
+		AlbumPlays: source.YTMusicAlbumPlays,
+		Enrichment: source.NewMusicBrainz(s),
+	}
 
-	mb := source.NewMusicBrainz(s)
-	err = a.processRun(ctx, &run, parseDependencies{Settings: s, Source: genius, Enrichment: mb})
+	if a.token != "" {
+		genius := source.NewGenius(s, a.token)
+		genius.SetQuotaObserver(a.uow.Quota.Save)
+
+		deps.Source = genius
+	}
+
+	a.parseEvent(ctx, run.ID, store.ParseEvent{Stage: "Запуск", Message: "Парсер начал работу"})
+
+	err = a.processRun(ctx, &run, deps)
 
 	if ctx.Err() != nil {
 		return ctx.Err()
@@ -147,13 +182,41 @@ func (a *App) parseNext(ctx context.Context, s domain.Settings) error {
 		run.Status, run.Error = "errored", err.Error()
 	}
 
+	a.parseEvent(ctx, run.ID, store.ParseEvent{
+		Stage: "Завершение", Message: fmt.Sprintf("Обработано %d, ошибок %d", run.Processed, run.Failed),
+	})
 	return errors.Join(err, a.uow.Runs.Finish(ctx, run))
 }
 
 type parseDependencies struct {
-	Settings   domain.Settings
-	Source     source.CatalogSource
-	Enrichment *source.MusicBrainz
+	Progress      func(string, string)
+	YouTubeMusic  func(context.Context, domain.Settings, domain.Artist, []source.Song) (source.Catalog, error)
+	ResolveTracks func(context.Context, domain.Settings, domain.Artist, []source.Song) (source.Catalog, error)
+	AlbumPlays    func(context.Context, domain.Settings, source.Catalog) (source.Catalog, error)
+	Settings      domain.Settings
+	Source        source.CatalogSource
+	Enrichment    *source.MusicBrainz
+}
+
+func (a *App) parseEvent(ctx context.Context, run uuid.UUID, event store.ParseEvent) {
+	if err := a.uow.Runs.AddEvent(ctx, run, event); err != nil && ctx.Err() == nil {
+		a.log.Warn("запись журнала парсинга", "run_id", run, "error", err)
+	}
+}
+
+func (d parseDependencies) progress(stage, message string) {
+	if d.Progress != nil {
+		d.Progress(stage, message)
+	}
+}
+
+func (d parseDependencies) sourceDone(stage string, started time.Time, err error) {
+	elapsed := time.Since(started).Round(time.Millisecond)
+	if err != nil {
+		d.progress(stage, fmt.Sprintf("Ошибка за %s: %v", elapsed, err))
+	} else {
+		d.progress(stage, fmt.Sprintf("Шаг завершён за %s", elapsed))
+	}
 }
 
 func (a *App) processRun(ctx context.Context, run *domain.ParseRun, deps parseDependencies) error {
@@ -162,6 +225,7 @@ func (a *App) processRun(ctx context.Context, run *domain.ParseRun, deps parseDe
 		if err != nil {
 			return err
 		}
+
 		if current.Status == "stopping" {
 			return nil
 		}
@@ -175,30 +239,24 @@ func (a *App) processRun(ctx context.Context, run *domain.ParseRun, deps parseDe
 			return err
 		}
 
-		err = a.parseArtistWithRetry(ctx, run, artist, deps, 3*time.Minute)
+		deps.Progress = func(stage, message string) {
+			a.parseEvent(ctx, run.ID, store.ParseEvent{Artist: artist.Name, Stage: stage, Message: message})
+		}
+		deps.progress("Исполнитель", "Начали обработку")
+
+		err = a.parseArtistWithRetry(ctx, run, artist, deps)
+		deps.sourceDone("Исполнитель", artist.UpdatedAt, err)
 
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
+
 		if errors.Is(err, errParsingStopped) {
 			return a.uow.Artists.Release(ctx, artist.ID)
 		}
+
 		if errors.Is(err, context.DeadlineExceeded) {
 			return errors.Join(err, a.uow.Artists.Release(ctx, artist.ID))
-		}
-
-		var apiErr *source.HTTPError
-		if errors.As(err, &apiErr) && apiErr.Status == 429 {
-			// Клиент уже исчерпал повторы или время ожидания; оставляем исполнителя для следующего запуска.
-			if failErr := a.uow.Artists.Fail(ctx, artist.ID, err.Error()); failErr != nil {
-				return errors.Join(err, failErr)
-			}
-
-			if retryErr := a.uow.Artists.Retry(ctx, artist.ID); retryErr != nil {
-				return errors.Join(err, retryErr)
-			}
-
-			return err
 		}
 
 		run.Processed++
@@ -216,36 +274,47 @@ func (a *App) processRun(ctx context.Context, run *domain.ParseRun, deps parseDe
 
 var errParsingStopped = errors.New("парсинг остановлен")
 
-func (a *App) parseArtistWithRetry(ctx context.Context, run *domain.ParseRun, artist domain.Artist, deps parseDependencies, delay time.Duration) error {
+func (a *App) parseArtistWithRetry(
+	ctx context.Context, run *domain.ParseRun, artist domain.Artist, deps parseDependencies,
+) error {
+	const delay = 3 * time.Minute
 	for attempt := 0; ; attempt++ {
 		err := a.parseArtist(ctx, artist, deps)
 		if !errors.Is(err, context.DeadlineExceeded) || ctx.Err() != nil || attempt == 3 {
 			return err
 		}
+
+		deps.progress("Повтор", "Тайм-аут. Следующая попытка через 3 минуты")
 		a.log.Warn("тайм-аут парсинга, ожидаем повтор", "artist_id", artist.ID, "retry", attempt+1, "wait", delay, "error", err)
-		if err := a.waitParseRetry(ctx, run, artist.ID, deps.Settings, delay); err != nil {
+
+		if err := a.waitParseRetry(ctx, run, artist.ID, deps.Settings); err != nil {
 			return err
 		}
 	}
 }
 
-func (a *App) waitParseRetry(ctx context.Context, run *domain.ParseRun, artistID uuid.UUID, s domain.Settings, delay time.Duration) error {
-	deadline := time.Now().Add(delay)
+func (a *App) waitParseRetry(ctx context.Context, run *domain.ParseRun, artistID uuid.UUID, s domain.Settings) error {
+	deadline := time.Now().Add(3 * time.Minute)
+
 	for {
 		current, err := a.uow.Runs.Renew(ctx, *run, s.TaskTimeoutSeconds+30)
 		if err != nil {
 			return err
 		}
+
 		if current.Status == "stopping" {
 			return errParsingStopped
 		}
+
 		if err := a.uow.Artists.Renew(ctx, artistID, s.TaskTimeoutSeconds+30); err != nil {
 			return err
 		}
+
 		remaining := time.Until(deadline)
 		if remaining <= 0 {
 			return nil
 		}
+
 		if !wait(ctx, min(remaining, 2*time.Second)) {
 			return ctx.Err()
 		}
@@ -256,57 +325,82 @@ func (a *App) parseArtist(ctx context.Context, artist domain.Artist, deps parseD
 	ctx, cancel := context.WithTimeout(ctx, time.Duration(deps.Settings.TaskTimeoutSeconds)*time.Second)
 	defer cancel()
 
-	n := ParseTrackLimit(deps.Settings.KParse, artist.Points)
-
-	c, err := deps.Source.Catalog(ctx, source.Lookup{Name: artist.Name, GeniusID: artist.GeniusID, TrackLimit: n})
+	saved, err := a.savedCatalog(ctx, artist.ID)
 	if err != nil {
 		return err
 	}
 
-	artist.GeniusID, artist.FullName, artist.Artists = &c.ArtistID, c.Name, []string{}
-	enrichment, enrichErr := deps.Enrichment.Enrich(ctx, artist.Name)
-	if errors.Is(enrichErr, context.DeadlineExceeded) {
-		return enrichErr
+	catalog := a.collectCatalog(ctx, &artist, deps, saved)
+
+	subs := firstKnown(artist.YtSubs, catalog.YtSubs)
+	if slices.Contains(artist.ManualFields, "yt_subs") {
+		subs = artist.YtSubs
 	}
 
-	if enrichErr == nil {
-		artist.Country, artist.MusicBrainzID = enrichment.Country, enrichment.ID
-		artist.FullName, artist.Artists = enrichment.FullName, enrichment.Members
-	} else {
-		c.Warnings = append(c.Warnings, enrichErr.Error())
+	if err := ctx.Err(); err != nil {
+		return err
 	}
 
-	artist.Error = strings.Join(c.Warnings, "; ")
+	artist.GeniusID = firstKnown(optionalID(catalog.ArtistID), artist.GeniusID)
+	artist.YTMusicID = firstKnown(catalog.YTMusicID, artist.YTMusicID)
+	artist.FullName = firstKnown(catalog.Name, artist.FullName)
+	artist.YtSubs = subs
 
+	if !slices.Contains(artist.ManualFields, "yt_plays") {
+		artist.YtPlays = firstKnown(artist.YtPlays, firstKnown(catalog.YtPlays, estimatePlays(subs)))
+	}
+
+	deps.progress("Каталог", fmt.Sprintf("Сохраняем альбомы (%d) и треки (%d)", len(catalog.Albums), len(catalog.Tracks)))
+
+	for _, warning := range catalog.Warnings {
+		deps.progress("Предупреждение", warning)
+	}
 	return a.uow.Transaction(ctx, func(tx *store.UnitOfWork) error {
-		return persistCatalog(ctx, tx, catalogInput{Artist: artist, Catalog: c})
+		return persistCatalog(ctx, tx, artist, catalog)
 	})
 }
 
-// ParseTrackLimit вычисляет число импортируемых треков на исполнителя.
-func ParseTrackLimit(k, points float64) int {
-	if k <= 0 || points <= 0 {
-		return 0
+// ParseTrackLimit возвращает лимит треков по числу подписчиков YouTube Music.
+func ParseTrackLimit(subs *int64) int {
+	if subs == nil {
+		return 1
 	}
 
-	return max(1, int(math.Floor(k*points)))
+	for i, threshold := range []int64{100_000, 300_000, 500_000, 1_000_000, 2_000_000, 5_000_000, 10_000_000} {
+		if *subs < threshold {
+			return i + 1
+		}
+	}
+
+	return 8
 }
 
-type catalogInput struct {
-	Artist  domain.Artist
-	Catalog source.Catalog
+func estimatePlays(subs *int64) *int64 {
+	if subs == nil {
+		return nil
+	}
+
+	plays := min(*subs, math.MaxInt64/2) * 2
+
+	return &plays
 }
 
-func persistCatalog(ctx context.Context, tx *store.UnitOfWork, in catalogInput) error {
-	artist, c := in.Artist, in.Catalog
+func optionalID(id int64) *int64 {
+	if id == 0 {
+		return nil
+	}
 
+	return &id
+}
+
+func persistCatalog(ctx context.Context, tx *store.UnitOfWork, artist domain.Artist, c source.Catalog) error {
 	logo, err := imageTask(ctx, tx, c.LogoURL)
 	if err != nil {
 		return err
 	}
 
 	artist.LogoDownloadID = logo
-	albums := map[int64]domain.Album{}
+	albums := make([]domain.Album, 0, len(c.Albums))
 
 	for _, album := range c.Albums {
 		cover, err := imageTask(ctx, tx, album.CoverURL)
@@ -315,22 +409,62 @@ func persistCatalog(ctx context.Context, tx *store.UnitOfWork, in catalogInput) 
 		}
 
 		saved, err := tx.Albums.Import(ctx, domain.Album{
-			ID: uuid.New(), Name: album.Name, ArtistID: artist.ID, GeniusID: &album.ID,
-			ReleaseDate: album.ReleaseDate, TrackList: album.TrackList,
-			TrackListComplete: album.Complete, CoverDownloadID: cover,
+			ID: uuid.New(), Name: album.Name, ArtistID: artist.ID, GeniusID: optionalID(album.ID), YTMusicID: album.YTMusicID,
+			MusicBrainzID: album.MusicBrainzID, SourceYtPlays: album.YtPlays, ReleaseDate: album.ReleaseDate,
+			TrackList: album.TrackList, TrackListComplete: album.Complete, CoverDownloadID: cover,
 		})
 		if err != nil {
 			return err
 		}
 
-		albums[album.ID] = saved
+		albums = append(albums, saved)
 	}
 
 	for _, song := range c.Tracks {
-		if err := persistSong(ctx, tx, songInput{Artist: artist, Song: song, Albums: albums}); err != nil {
+		var album *domain.Album
+
+		if song.Album != nil {
+			i, ambiguous := albumMatch(c.Albums, *song.Album)
+			if i >= 0 {
+				album = &albums[i]
+			}
+
+			if ambiguous {
+				c.Warnings = append(c.Warnings, fmt.Sprintf("трек %q: альбом не определён однозначно", song.Title))
+			}
+		}
+
+		track := domain.Track{
+			ID: uuid.New(), Name: song.Title, ArtistID: artist.ID, GeniusID: optionalID(song.ID),
+			MusicBrainzID: song.MusicBrainzID, YTMusicID: song.YTMusicID, YtPlays: song.YtPlays, DurationSeconds: song.Duration,
+		}
+		if album != nil {
+			track.AlbumID = &album.ID
+		}
+
+		track, err := tx.Tracks.Import(ctx, track, artist.YtPlays)
+		if err != nil {
+			return err
+		}
+
+		if err := prepareAudio(ctx, tx, track, artist.Name); err != nil {
 			return err
 		}
 	}
+
+	var shortlist []uuid.UUID
+
+	for _, album := range albums {
+		if album.YTMusicID != nil && slices.Contains(c.RankedAlbumIDs, *album.YTMusicID) {
+			shortlist = append(shortlist, album.ID)
+		}
+	}
+
+	if err := tx.Albums.SaveShortlist(ctx, artist.ID, shortlist); err != nil {
+		return err
+	}
+
+	artist.Error = strings.Join(c.Warnings, "; ")
 
 	return tx.Artists.Imported(ctx, artist)
 }
@@ -340,79 +474,30 @@ func imageTask(ctx context.Context, tx *store.UnitOfWork, address string) (*uuid
 		return nil, nil
 	}
 
+	if err := domain.ValidateURL(address); err != nil {
+		return nil, err
+	}
+
 	d, err := tx.Downloads.Create(ctx, domain.Download{
-		ID: uuid.New(), SourceType: "image",
-		SourceURI: address, FileType: "image", Meta: map[string]any{},
+		ID: uuid.New(), SourceType: "image", SourceURI: address, FileType: "image", Meta: map[string]any{},
 	})
 
 	return &d.ID, err
 }
 
-type songInput struct {
-	Artist domain.Artist
-	Song   source.Song
-	Albums map[int64]domain.Album
-}
-
-func persistSong(ctx context.Context, tx *store.UnitOfWork, in songInput) error {
-	t := domain.Track{ID: uuid.New(), Name: in.Song.Title, ArtistID: in.Artist.ID, GeniusID: &in.Song.ID}
-	albumName := ""
-
-	if in.Song.Album != nil {
-		if album, ok := in.Albums[in.Song.Album.ID]; ok {
-			t.AlbumID, albumName = &album.ID, album.Name
-		}
+func prepareAudio(ctx context.Context, tx *store.UnitOfWork, track domain.Track, artistName string) error {
+	exists, err := tx.Downloads.HasAudioJob(ctx, track.ID)
+	if err != nil || exists {
+		return err
 	}
 
-	t, err := tx.Tracks.Import(ctx, t)
+	task, err := tx.Downloads.Create(ctx, domain.Download{
+		ID: uuid.New(), SourceType: "unknown", SourceURI: "track:" + track.ID.String(), FileType: "mp3",
+		Meta: map[string]any{"title": track.Name, "artist": artistName},
+	})
 	if err != nil {
 		return err
 	}
 
-	tasks := songTasks(in.Song)
-	if len(tasks) == 0 {
-		tasks = []domain.Download{{SourceType: "unknown", SourceURI: fmt.Sprintf("unknown:genius:%d", in.Song.ID)}}
-	}
-
-	for _, task := range tasks {
-		task.ID, task.FileType = uuid.New(), "mp3"
-		task.Meta = map[string]any{"title": t.Name, "artist": in.Artist.Name, "album": albumName}
-
-		d, err := tx.Downloads.Create(ctx, task)
-		if err != nil {
-			return err
-		}
-
-		if err := tx.Downloads.Link(ctx, t.ID, d.ID); err != nil {
-			return err
-		}
-	}
-
-	return nil
-}
-
-func songTasks(song source.Song) []domain.Download {
-	r := []domain.Download{}
-	seen := map[string]bool{}
-	add := func(kind, address string) {
-		if address != "" && !seen[address] && domain.ValidateURL(address) == nil {
-			r = append(r, domain.Download{SourceType: kind, SourceURI: address})
-			seen[address] = true
-		}
-	}
-	add("youtube", song.YouTubeURL)
-
-	for _, media := range song.Media {
-		if media.Provider == "youtube" {
-			add("youtube", media.URL)
-			continue
-		}
-
-		u, err := url.Parse(media.URL)
-		if err == nil && strings.HasSuffix(strings.ToLower(u.Path), ".mp3") {
-			add("mp3", media.URL)
-		}
-	}
-
-	return r
+	return tx.Downloads.Link(ctx, track.ID, task.ID)
 }

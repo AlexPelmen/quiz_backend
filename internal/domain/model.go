@@ -18,23 +18,29 @@ var (
 
 // Artist хранит исполнителя; Artists содержит имена участников группы.
 type Artist struct {
-	ID             uuid.UUID  `json:"id"`
-	Name           string     `json:"name"`
-	FullName       string     `json:"full_name"`
-	Country        string     `json:"country"`
-	Status         string     `json:"status"`
-	LogoDownloadID *uuid.UUID `json:"logo_download_id"`
-	Tags           []string   `json:"tags"`
-	Artists        []string   `json:"artists"`
-	Points         float64    `json:"points"`
-	GuessNum       int        `json:"guess_num"`
-	GeniusID       *int64     `json:"genius_id"`
-	MusicBrainzID  string     `json:"musicbrainz_id"`
-	ManualFields   []string   `json:"manual_fields"`
-	Error          string     `json:"error"`
-	LeaseUntil     *time.Time `json:"-"`
-	CreatedAt      time.Time  `json:"created_at"`
-	UpdatedAt      time.Time  `json:"updated_at"`
+	YtSubs           *int64     `json:"yt_subs"`
+	MembersKnown     bool       `json:"members_known"`
+	ID               uuid.UUID  `json:"id"`
+	Name             string     `json:"name"`
+	FullName         string     `json:"full_name"`
+	Country          string     `json:"country"`
+	Status           string     `json:"status"`
+	LogoDownloadID   *uuid.UUID `json:"logo_download_id"`
+	Tags             []string   `json:"tags"`
+	Artists          []string   `json:"artists"`
+	YtPlays          *int64     `json:"yt_plays"`
+	Asked            int64      `json:"asked"`
+	Guessed          int64      `json:"guessed"`
+	ExcludedFromQuiz bool       `json:"excluded_from_quiz"`
+	YTMusicID        *string    `json:"yt_music_id"`
+	MissingFields    []string   `json:"missing_fields"`
+	GeniusID         *int64     `json:"genius_id"`
+	MusicBrainzID    string     `json:"musicbrainz_id"`
+	ManualFields     []string   `json:"manual_fields"`
+	Error            string     `json:"error"`
+	LeaseUntil       *time.Time `json:"-"`
+	CreatedAt        time.Time  `json:"created_at"`
+	UpdatedAt        time.Time  `json:"updated_at"`
 }
 
 // GeniusQuota содержит последнее наблюдение лимита официального API Genius.
@@ -47,14 +53,22 @@ type GeniusQuota struct {
 
 // Album содержит полный треклист CSV независимо от числа импортированных Track.
 type Album struct {
+	Status            string     `json:"status"`
+	MusicBrainzID     string     `json:"musicbrainz_id"`
+	ManualFields      []string   `json:"-"`
+	SourceYtPlays     *int64     `json:"-"`
 	ID                uuid.UUID  `json:"id"`
 	Name              string     `json:"name"`
 	CoverDownloadID   *uuid.UUID `json:"cover_download_id"`
 	ReleaseDate       string     `json:"release_date"`
 	ArtistID          uuid.UUID  `json:"artist_id"`
 	Tags              []string   `json:"tags"`
-	Points            float64    `json:"points"`
-	GuessNum          int        `json:"guess_num"`
+	YtPlays           *int64     `json:"yt_plays"`
+	Asked             int64      `json:"asked"`
+	Guessed           int64      `json:"guessed"`
+	ExcludedFromQuiz  bool       `json:"excluded_from_quiz"`
+	YTMusicID         *string    `json:"yt_music_id"`
+	MissingFields     []string   `json:"missing_fields"`
 	GeniusID          *int64     `json:"genius_id"`
 	TrackList         string     `json:"track_list"`
 	TrackListComplete bool       `json:"track_list_complete"`
@@ -65,26 +79,36 @@ type Album struct {
 
 // Track хранится даже при отсутствии доступной записи.
 type Track struct {
-	ID        uuid.UUID  `json:"id"`
-	Name      string     `json:"name"`
-	ArtistID  uuid.UUID  `json:"artist_id"`
-	AlbumID   *uuid.UUID `json:"album_id"`
-	Tags      []string   `json:"tags"`
-	Points    float64    `json:"points"`
-	GuessNum  int        `json:"guess_num"`
-	GeniusID  *int64     `json:"genius_id"`
-	CreatedAt time.Time  `json:"created_at"`
-	UpdatedAt time.Time  `json:"updated_at"`
+	Status           string     `json:"status"`
+	MusicBrainzID    string     `json:"musicbrainz_id"`
+	ManualFields     []string   `json:"-"`
+	DurationSeconds  *int       `json:"duration_seconds"`
+	ID               uuid.UUID  `json:"id"`
+	Name             string     `json:"name"`
+	ArtistID         uuid.UUID  `json:"artist_id"`
+	AlbumID          *uuid.UUID `json:"album_id"`
+	Tags             []string   `json:"tags"`
+	YtPlays          *int64     `json:"yt_plays"`
+	Asked            int64      `json:"asked"`
+	Guessed          int64      `json:"guessed"`
+	ExcludedFromQuiz bool       `json:"excluded_from_quiz"`
+	YTMusicID        *string    `json:"yt_music_id"`
+	MissingFields    []string   `json:"missing_fields"`
+	GeniusID         *int64     `json:"genius_id"`
+	CreatedAt        time.Time  `json:"created_at"`
+	UpdatedAt        time.Time  `json:"updated_at"`
 }
 
 // TrackWithStatus дополняет трек состоянием его аудиозаписей.
 type TrackWithStatus struct {
 	Track
-	Status string `json:"status"`
+	AudioStatus string `json:"audio_status"`
 }
 
 // Download описывает источник и результат загрузки. URI назначается только сервером.
 type Download struct {
+	Downloader    string         `json:"downloader"`
+	Preview       bool           `json:"preview"`
 	ID            uuid.UUID      `json:"id"`
 	SourceType    string         `json:"source_type"`
 	SourceURI     string         `json:"source_uri"`
@@ -165,14 +189,15 @@ type Candidate struct {
 
 // Page задаёт ограничения выборки каталога.
 type Page struct {
-	Limit    int
-	Offset   int
-	ArtistID *uuid.UUID
-	AlbumID  *uuid.UUID
-	TrackID  *uuid.UUID
-	Status   string
-	Tag      string
-	Name     string
-	Sort     string
-	Order    string
+	Limit       int
+	Offset      int
+	ArtistID    *uuid.UUID
+	AlbumID     *uuid.UUID
+	TrackID     *uuid.UUID
+	AudioStatus string
+	Status      string
+	Tag         string
+	Name        string
+	Sort        string
+	Order       string
 }

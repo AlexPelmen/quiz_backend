@@ -2,48 +2,49 @@ package domain
 
 import (
 	"fmt"
-	"math"
 	"net/url"
 )
 
 // Settings содержит эксплуатационную конфигурацию без секретов.
 type Settings struct {
-	KParse                   float64  `json:"k_parse"`
-	KPopularity              float64  `json:"k_popularity"`
-	MinPopularityDelta       float64  `json:"min_popularity_delta"`
-	PollSeconds              int      `json:"poll_seconds"`
-	HTTPTimeoutSeconds       int      `json:"http_timeout_seconds"`
-	TaskTimeoutSeconds       int      `json:"task_timeout_seconds"`
-	DownloadWorkers          int      `json:"download_workers"`
-	MaxDownloadBytes         int64    `json:"max_download_bytes"`
-	StorageDir               string   `json:"storage_dir"`
-	FFmpeg                   string   `json:"ffmpeg"`
-	FFprobe                  string   `json:"ffprobe"`
-	YTDLP                    string   `json:"yt_dlp"`
-	YTDLPJSRuntime           string   `json:"yt_dlp_js_runtime"`
-	GeniusURL                string   `json:"genius_url"`
-	GeniusWebURL             string   `json:"genius_web_url"`
-	MusicBrainzURL           string   `json:"musicbrainz_url"`
-	UserAgent                string   `json:"user_agent"`
-	Source                   string   `json:"source"`
-	RoundTypes               []string `json:"round_types"`
-	GeniusRequestIntervalMS  int      `json:"genius_request_interval_ms"`
-	Source429Retries         int      `json:"source_429_retries"`
-	Source429DelaySeconds    int      `json:"source_429_delay_seconds"`
-	Source429MaxDelaySeconds int      `json:"source_429_max_delay_seconds"`
+	CoverArtArchiveURL          string   `json:"cover_art_archive_url"`
+	HitmoURL                    string   `json:"hitmo_url"`
+	YTMusicPython               string   `json:"yt_music_python"`
+	QuizGuessRateEnabled        bool     `json:"quiz_guess_rate_enabled"`
+	QuizGuessRateAskedThreshold int64    `json:"quiz_guess_rate_asked_threshold"`
+	PollSeconds                 int      `json:"poll_seconds"`
+	HTTPTimeoutSeconds          int      `json:"http_timeout_seconds"`
+	TaskTimeoutSeconds          int      `json:"task_timeout_seconds"`
+	DownloadWorkers             int      `json:"download_workers"`
+	MaxDownloadBytes            int64    `json:"max_download_bytes"`
+	StorageDir                  string   `json:"storage_dir"`
+	FFmpeg                      string   `json:"ffmpeg"`
+	FFprobe                     string   `json:"ffprobe"`
+	YTDLP                       string   `json:"yt_dlp"`
+	YTDLPJSRuntime              string   `json:"yt_dlp_js_runtime"`
+	GeniusURL                   string   `json:"genius_url"`
+	GeniusWebURL                string   `json:"genius_web_url"`
+	MusicBrainzURL              string   `json:"musicbrainz_url"`
+	UserAgent                   string   `json:"user_agent"`
+	RoundTypes                  []string `json:"round_types"`
+	GeniusRequestIntervalMS     int      `json:"genius_request_interval_ms"`
+	Source429Retries            int      `json:"source_429_retries"`
+	Source429DelaySeconds       int      `json:"source_429_delay_seconds"`
+	Source429MaxDelaySeconds    int      `json:"source_429_max_delay_seconds"`
 }
 
 // DefaultSettings задаёт рабочие значения для нового экземпляра.
 func DefaultSettings() Settings {
 	return Settings{
-		KParse: 0.1, KPopularity: 20, MinPopularityDelta: 1, PollSeconds: 2, HTTPTimeoutSeconds: 30,
+		CoverArtArchiveURL: "https://coverartarchive.org",
+		HitmoURL:           "https://rus.hitmos.fm", YTMusicPython: "python3",
+		QuizGuessRateEnabled: true, QuizGuessRateAskedThreshold: 5, PollSeconds: 2, HTTPTimeoutSeconds: 30,
 		TaskTimeoutSeconds: 600, DownloadWorkers: 2, MaxDownloadBytes: 100 << 20,
 		StorageDir: "data", FFmpeg: "ffmpeg", FFprobe: "ffprobe", YTDLP: "yt-dlp", YTDLPJSRuntime: "node",
 		GeniusURL: "https://api.genius.com", GeniusWebURL: "https://genius.com/api",
 		MusicBrainzURL: "https://musicbrainz.org/ws/2", UserAgent: "MusicQuiz/1.0 (local music quiz service)",
-		Source:                  "genius",
 		GeniusRequestIntervalMS: 1000, Source429Retries: 3,
-		Source429DelaySeconds: 30, Source429MaxDelaySeconds: 300,
+		Source429DelaySeconds: 1, Source429MaxDelaySeconds: 3,
 		RoundTypes: []string{
 			"artist_by_track", "artist_by_cover", "track_vowels", "artist_by_logo", "artist_initial",
 			"artist_by_track", "artist_by_cover", "track_vowels", "artist_by_logo", "artist_initial",
@@ -59,20 +60,19 @@ func (s Settings) Validate() error {
 		return fmt.Errorf("%w: недопустимые настройки ожидания источника", ErrInvalid)
 	}
 
-	if s.KParse < 0 || s.KParse > 100 || math.IsNaN(s.KPopularity) || s.KPopularity < 0 || s.KPopularity > 100 ||
-		math.IsNaN(s.MinPopularityDelta) || s.MinPopularityDelta < 0 || s.MinPopularityDelta > 100 ||
-		s.PollSeconds < 1 || s.HTTPTimeoutSeconds < 1 ||
+	if s.QuizGuessRateAskedThreshold < 0 || s.PollSeconds < 1 || s.HTTPTimeoutSeconds < 1 ||
 		s.TaskTimeoutSeconds < s.HTTPTimeoutSeconds || s.TaskTimeoutSeconds > 86400 ||
 		s.DownloadWorkers < 1 || s.DownloadWorkers > 16 || s.MaxDownloadBytes < 1024 {
 		return fmt.Errorf("%w: недопустимые числовые настройки", ErrInvalid)
 	}
 
-	if s.StorageDir == "" || s.FFmpeg == "" || s.FFprobe == "" || s.YTDLP == "" || s.UserAgent == "" {
+	if s.YTMusicPython == "" || s.StorageDir == "" || s.FFmpeg == "" || s.FFprobe == "" ||
+		s.YTDLP == "" || s.UserAgent == "" {
 		return fmt.Errorf("%w: пути и user_agent обязательны", ErrInvalid)
 	}
 
-	if s.Source != "genius" || len(s.RoundTypes) != 10 {
-		return fmt.Errorf("%w: требуется источник genius и десять типов раундов", ErrInvalid)
+	if len(s.RoundTypes) != 10 {
+		return fmt.Errorf("%w: требуется десять типов раундов", ErrInvalid)
 	}
 
 	if s.YTDLPJSRuntime != "node" && s.YTDLPJSRuntime != "deno" && s.YTDLPJSRuntime != "bun" {
@@ -85,7 +85,7 @@ func (s Settings) Validate() error {
 		}
 	}
 
-	for _, address := range []string{s.GeniusURL, s.GeniusWebURL, s.MusicBrainzURL} {
+	for _, address := range []string{s.GeniusURL, s.GeniusWebURL, s.MusicBrainzURL, s.HitmoURL, s.CoverArtArchiveURL} {
 		if err := ValidateURL(address); err != nil {
 			return err
 		}

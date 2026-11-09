@@ -28,14 +28,14 @@ func TestRetryAfter(t *testing.T) {
 	}
 }
 
-func TestRequestResumesAfter429(t *testing.T) {
+func TestRequestResumesAfter503(t *testing.T) {
 	calls := make(chan time.Time, 4)
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		calls <- time.Now()
-		if len(calls) < 3 {
+		if len(calls) < 4 {
 			w.Header().Set("Retry-After", "invalid")
-			http.Error(w, "wait", http.StatusTooManyRequests)
+			http.Error(w, "wait", http.StatusServiceUnavailable)
 
 			return
 		}
@@ -45,7 +45,7 @@ func TestRequestResumesAfter429(t *testing.T) {
 	defer server.Close()
 
 	c := jsonClient{
-		client: server.Client(), base: server.URL, retries: 3,
+		client: server.Client(), base: server.URL, retryStatus: http.StatusServiceUnavailable, retries: 3,
 		retryDelay: 10 * time.Millisecond, maxRetryDelay: 40 * time.Millisecond,
 	}
 
@@ -55,25 +55,23 @@ func TestRequestResumesAfter429(t *testing.T) {
 		t.Fatalf("запрос не восстановился: %+v %v", result, err)
 	}
 
-	first, second, third := <-calls, <-calls, <-calls
-	if second.Sub(first) < 10*time.Millisecond || third.Sub(second) < 20*time.Millisecond {
+	first, second, third, fourth := <-calls, <-calls, <-calls, <-calls
+	if second.Sub(first) < 10*time.Millisecond || third.Sub(second) < 20*time.Millisecond ||
+		fourth.Sub(third) < 30*time.Millisecond {
 		t.Fatal("задержка между повторами не соблюдена")
 	}
 
-	if c.retryWait(2*time.Minute, 9) != 2*time.Minute {
-		t.Fatal("Retry-After нельзя сокращать до внутреннего предела задержки")
-	}
 }
 
-func Test429RetriesBoundedAndCancelable(t *testing.T) {
-	for _, mode := range []string{"bounded", "canceled"} {
+func Test429RetriesRespectBounds(t *testing.T) {
+	for _, mode := range []string{"bounded", "retry-after"} {
 		t.Run(mode, func(t *testing.T) {
 			calls := make(chan struct{}, 4)
 
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 				calls <- struct{}{}
 
-				if mode == "canceled" {
+				if mode == "retry-after" {
 					w.Header().Set("Retry-After", "3600")
 				}
 
@@ -82,7 +80,7 @@ func Test429RetriesBoundedAndCancelable(t *testing.T) {
 			defer server.Close()
 
 			c := jsonClient{
-				client: server.Client(), base: server.URL, retries: 2,
+				client: server.Client(), base: server.URL, retryStatus: http.StatusTooManyRequests, retries: 2,
 				retryDelay: time.Millisecond, maxRetryDelay: 2 * time.Millisecond,
 			}
 
@@ -98,7 +96,7 @@ func Test429RetriesBoundedAndCancelable(t *testing.T) {
 			}
 
 			want := 3
-			if mode == "canceled" {
+			if mode == "retry-after" {
 				want = 1
 			}
 
@@ -119,7 +117,7 @@ func TestForbiddenIsNotRetried(t *testing.T) {
 	}))
 	defer server.Close()
 
-	c := jsonClient{client: server.Client(), base: server.URL, retries: 3}
+	c := jsonClient{client: server.Client(), base: server.URL, retryStatus: http.StatusTooManyRequests, retries: 3}
 	if err := c.get(t.Context(), "/", &struct{}{}); err == nil || len(calls) != 1 {
 		t.Fatalf("403 не должен повторяться: %v, запросов %d", err, len(calls))
 	}

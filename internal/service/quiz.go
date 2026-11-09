@@ -38,7 +38,7 @@ func (a *App) Generate(ctx context.Context, f PackForm, cover io.Reader) (domain
 		p.Tags = []string{}
 	}
 
-	if err := validateNamePoints(p.Name, 100); err != nil {
+	if err := validateCatalogName(p.Name); err != nil {
 		return p, err
 	}
 
@@ -76,7 +76,7 @@ func (a *App) Generate(ctx context.Context, f PackForm, cover io.Reader) (domain
 	}
 
 	err = a.uow.Transaction(ctx, func(tx *store.UnitOfWork) error {
-		if err := buildPack(ctx, tx, &p, packRounds{kinds, f.ArtistTag, f.RoundTypes != nil}); err != nil {
+		if err := buildPack(ctx, tx, &p, packRounds{kinds, f.ArtistTag, f.RoundTypes != nil, settings}); err != nil {
 			return err
 		}
 
@@ -120,12 +120,15 @@ type packRounds struct {
 	kinds    []string
 	tag      string
 	explicit bool
+	settings domain.Settings
 }
 
 func buildPack(ctx context.Context, tx *store.UnitOfWork, p *domain.QuizPack, input packRounds) error {
 	used := []uuid.UUID{}
 	for _, kind := range input.kinds {
-		round, err := buildRound(ctx, tx, roundInput{Kind: kind, Tag: input.tag, Used: used, Pack: *p})
+		round, err := buildRound(ctx, tx, roundInput{
+			Kind: kind, Tag: input.tag, Used: used, Pack: *p, Settings: input.settings,
+		})
 		if errors.Is(err, domain.ErrNotFound) {
 			if input.explicit {
 				return fmt.Errorf("%w: недостаточно исполнителей для раунда %s", domain.ErrInsufficient, kind)
@@ -153,23 +156,27 @@ func buildPack(ctx context.Context, tx *store.UnitOfWork, p *domain.QuizPack, in
 }
 
 type roundInput struct {
-	Kind string
-	Tag  string
-	Used []uuid.UUID
-	Pack domain.QuizPack
+	Kind     string
+	Tag      string
+	Used     []uuid.UUID
+	Pack     domain.QuizPack
+	Settings domain.Settings
 }
 
 func (in roundInput) pickFilter() store.PickFilter {
-	center := 50.0
+	center := 0.5
 
 	switch in.Pack.Difficulty {
 	case "easy":
-		center = 80
+		center = 0.2
 	case "hard":
-		center = 20
+		center = 0.8
 	}
 
-	return store.PickFilter{Kind: in.Kind, Tag: in.Tag, Center: center}
+	return store.PickFilter{
+		Kind: in.Kind, Tag: in.Tag, Center: center,
+		GuessRateEnabled: in.Settings.QuizGuessRateEnabled, AskedThreshold: in.Settings.QuizGuessRateAskedThreshold,
+	}
 }
 
 func buildRound(ctx context.Context, tx *store.UnitOfWork, in roundInput) (domain.QuizRound, error) {
@@ -182,6 +189,7 @@ func buildRound(ctx context.Context, tx *store.UnitOfWork, in roundInput) (domai
 
 	filter := in.pickFilter()
 	used := append([]uuid.UUID{}, in.Used...)
+
 	for i := range roundSize {
 		c, err := tx.Packs.Pick(ctx, used, filter)
 		if err != nil {
@@ -351,7 +359,7 @@ func (a *App) PatchPack(ctx context.Context, id uuid.UUID, f PackPatch) (domain.
 			p.Tags = *f.Tags
 		}
 
-		if err := validateNamePoints(p.Name, 100); err != nil {
+		if err := validateCatalogName(p.Name); err != nil {
 			return err
 		}
 

@@ -32,8 +32,13 @@ func TestAlbumGuessingShuffle(t *testing.T) {
 		seedHTTPTrack(t, pool, i)
 	}
 
-	if _, err := pool.Exec(t.Context(), `INSERT INTO albums(id,name,artist_id,cover_download_id)
-		SELECT gen_random_uuid(),'Вторая обложка',artist_id,cover_download_id FROM albums`); err != nil {
+	if _, err := pool.Exec(t.Context(), `WITH next AS MATERIALIZED (
+            SELECT gen_random_uuid() AS id,artist_id,cover_download_id FROM catalog_albums
+        ),saved AS (
+            INSERT INTO albums(id,name,cover_download_id)
+            SELECT id,'Вторая обложка',cover_download_id FROM next RETURNING id
+        ) INSERT INTO artist_to_album(album_id,artist_id)
+            SELECT saved.id,next.artist_id FROM saved JOIN next USING(id)`); err != nil {
 		t.Fatal(err)
 	}
 

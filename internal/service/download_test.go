@@ -56,6 +56,14 @@ func TestDirectMP3Download(t *testing.T) {
 	}
 
 	app := New(uow, slog.New(slog.NewTextHandler(io.Discard, nil)), "test")
+	if err := app.downloadNext(t.Context(), s); !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("автозапуск: %v", err)
+	}
+
+	if _, err := app.RetryDownload(t.Context(), d.ID, DownloadForm{}); err != nil {
+		t.Fatal(err)
+	}
+
 	if err := app.downloadNext(t.Context(), s); err != nil {
 		t.Fatal(err)
 	}
@@ -91,6 +99,10 @@ func assertRetryLimit(t *testing.T, app *App, uow *store.UnitOfWork, in retryFix
 		SourceURI: in.URL, FileType: "mp3", Meta: map[string]any{},
 	})
 	if err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := app.RetryDownload(t.Context(), d.ID, DownloadForm{}); err != nil {
 		t.Fatal(err)
 	}
 

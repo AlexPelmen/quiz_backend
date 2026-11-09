@@ -39,8 +39,12 @@ func TestPackRoundOptions(t *testing.T) {
 		}
 	}
 
-	if _, err := pool.Exec(t.Context(), `INSERT INTO albums(id,name,artist_id,points)
-		SELECT gen_random_uuid(),'Релиз ' || n,id,n FROM artists CROSS JOIN generate_series(1,12) AS n`); err != nil {
+	if _, err := pool.Exec(t.Context(), `WITH next AS MATERIALIZED (
+            SELECT gen_random_uuid() AS id,artists.id AS artist_id,'Релиз ' || n AS name,n
+            FROM artists CROSS JOIN generate_series(1,12) AS n
+        ), saved AS (INSERT INTO albums(id,name,source_yt_plays) SELECT id,name,n FROM next RETURNING id)
+        INSERT INTO artist_to_album(album_id,artist_id)
+            SELECT saved.id,next.artist_id FROM saved JOIN next USING(id)`); err != nil {
 		t.Fatal(err)
 	}
 
@@ -78,13 +82,15 @@ func checkSelectedRound(t *testing.T, pack domain.QuizPack, kind string) {
 
 	for i, q := range pack.Rounds[0].Questions {
 		if kind == "artist_by_albums" {
-			want := []string{"Альбом"}
-			for n := 12; n >= 4; n-- {
-				want = append(want, fmt.Sprintf("Релиз %d", n))
+			names := strings.Split(q.SecondaryText, "\n")
+			seen := map[string]bool{}
+
+			for _, name := range names {
+				seen[name] = true
 			}
 
-			if q.SecondaryText != strings.Join(want, "\n") || q.SoundDownloadID != nil {
-				t.Fatalf("неверная подсказка по альбомам: %q", q.SecondaryText)
+			if len(names) != 10 || len(seen) != 10 || q.SoundDownloadID != nil {
+				t.Fatalf("ожидалось десять уникальных названий альбомов: %q", q.SecondaryText)
 			}
 
 			continue

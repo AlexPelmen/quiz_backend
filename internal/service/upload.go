@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -142,7 +143,15 @@ func (a *App) saveUpload(
 				return err
 			}
 
-			return tx.Downloads.Link(ctx, id, d.ID)
+			if err := tx.Downloads.Link(ctx, id, d.ID); err != nil {
+				return err
+			}
+
+			if seconds, ok := d.Meta["duration_seconds"].(float64); ok && seconds <= math.MaxInt32 {
+				return tx.Downloads.FillTrackDuration(ctx, d.ID, max(1, int(math.Round(seconds))))
+			}
+
+			return nil
 		}
 	})
 

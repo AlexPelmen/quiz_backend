@@ -24,6 +24,7 @@ type jsonClient struct {
 	interval      time.Duration
 	next          time.Time
 	retries       int
+	retryStatus   int
 	retryDelay    time.Duration
 	maxRetryDelay time.Duration
 	onQuota       func(context.Context, domain.GeniusQuota) error
@@ -47,34 +48,24 @@ func (c *jsonClient) get(ctx context.Context, path string, target any) error {
 
 		var apiErr *HTTPError
 
-		if !errors.As(err, &apiErr) || apiErr.Status != http.StatusTooManyRequests {
+		if !errors.As(err, &apiErr) || apiErr.Status != c.retryStatus || attempt >= c.retries {
 			return err
 		}
 
-		delay := c.retryWait(apiErr.RetryAfter, attempt)
-
-		c.next = time.Now().Add(delay)
-		if attempt >= c.retries {
+		if apiErr.RetryAfter > c.maxRetryDelay {
+			// Сервис попросил ждать дольше, чем позволяет короткий повтор.
 			return err
 		}
 
-		slog.WarnContext(ctx, "источник ограничил запросы; ожидаем повтор",
-			"source", c.base, "wait", delay, "retry", attempt+1)
+		delay := max(min(time.Duration(attempt+1)*c.retryDelay, c.maxRetryDelay), apiErr.RetryAfter)
+
+		slog.WarnContext(ctx, "временная ошибка источника, ожидаем повтор",
+			"source", c.base, "status", apiErr.Status, "wait", delay, "retry", attempt+1)
 
 		if waitErr := pause(ctx, delay); waitErr != nil {
-			// Сохраняем код 429, чтобы работник вернул исполнителя в очередь при исчерпании времени.
-			return fmt.Errorf("%w: ожидание прервано: %v", err, waitErr)
+			return errors.Join(err, waitErr)
 		}
 	}
-}
-
-func (c *jsonClient) retryWait(header time.Duration, attempt int) time.Duration {
-	delay := c.retryDelay
-	for range attempt {
-		delay = min(delay*2, c.maxRetryDelay)
-	}
-
-	return max(header, delay, c.interval)
 }
 
 func retryAfter(value string, now time.Time) time.Duration {

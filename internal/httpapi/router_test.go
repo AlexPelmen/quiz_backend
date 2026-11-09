@@ -29,7 +29,7 @@ func TestHTTPWorkflow(t *testing.T) {
 	app := service.New(uow, logger, "test-token")
 	router := httpapi.Router(app, logger)
 	call := client(t, router)
-	call("POST", "/api/v1/artists", `{"name":"Тест","points":101}`, 400)
+	call("POST", "/api/v1/artists", `{"name":"Тест","yt_plays":-1}`, 400)
 
 	created := call("POST", "/api/v1/artists", `{"name":"Тест","tags":["рок"]}`, 201)
 
@@ -37,14 +37,14 @@ func TestHTTPWorkflow(t *testing.T) {
 
 	decodeResult(t, created, &artist)
 
-	if artist.Points != 100 {
+	if artist.Asked != 0 || artist.Guessed != 0 || artist.ExcludedFromQuiz {
 		t.Fatal("не назначена оценка по умолчанию")
 	}
 
 	call("POST", "/api/v1/artists", `{"name":"ТЕСТ"}`, 409)
 
 	url := "/api/v1/artists/" + artist.ID.String()
-	call("PATCH", url, `{"points":0,"country":"RU"}`, 200)
+	call("PATCH", url, `{"excluded_from_quiz":true,"country":"RU"}`, 200)
 	call("PATCH", url, `{"status":"manual"}`, 200)
 
 	manual := call("GET", url, "", 200)
@@ -69,8 +69,8 @@ func TestHTTPWorkflow(t *testing.T) {
 
 	call("PATCH", url, `{"unknown":1}`, 400)
 	call("POST", "/api/v1/quiz-packs", `{"name":"Пустой"}`, 422)
-	call("PATCH", "/api/v1/settings", `{"k_parse":-1}`, 400)
-	call("PATCH", "/api/v1/settings", `{"k_parse":0.2}`, 200)
+	call("PATCH", "/api/v1/settings", `{"quiz_guess_rate_asked_threshold":-1}`, 400)
+	call("PATCH", "/api/v1/settings", `{"quiz_guess_rate_enabled":false}`, 200)
 	call("GET", "/api/v1/artists?limit=999", "", 400)
 	call("GET", "/api/v1/artists/not-a-uuid", "", 400)
 	call("DELETE", url, "", 204)
@@ -270,8 +270,16 @@ func seedHTTPTrack(t *testing.T, pool *pgxpool.Pool, n int) {
 		args []any
 	}{
 		{"INSERT INTO artists(id,name,status) VALUES($1,$2,'parsed')", []any{a, fmt.Sprintf("Исполнитель %d", n)}},
-		{"INSERT INTO albums(id,name,artist_id) VALUES($1,'Альбом',$2)", []any{al, a}},
-		{"INSERT INTO tracks(id,name,artist_id,album_id) VALUES($1,'Трек',$2,$3)", []any{tr, a, al}},
+		{
+			`WITH saved AS (INSERT INTO albums(id,name) VALUES($1,'Альбом') RETURNING id)
+                INSERT INTO artist_to_album(album_id,artist_id) SELECT id,$2 FROM saved`,
+			[]any{al, a},
+		},
+		{
+			`WITH saved AS (INSERT INTO tracks(id,name,album_id) VALUES($1,'Трек',$3) RETURNING id)
+                INSERT INTO artist_to_track(track_id,artist_id) SELECT id,$2 FROM saved`,
+			[]any{tr, a, al},
+		},
 		{
 			"INSERT INTO downloads(id,source_type,status,file_type,meta) VALUES($1,'mp3','finished','mp3',$2)",
 			[]any{d, map[string]any{"duration_seconds": 5}},

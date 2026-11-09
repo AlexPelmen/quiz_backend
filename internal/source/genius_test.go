@@ -2,7 +2,7 @@ package source
 
 import (
 	"context"
-	"encoding/csv"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -231,15 +231,11 @@ func TestLiveRemainingArtists(t *testing.T) {
 
 func TestGeniusCatalog(t *testing.T) {
 	responses := map[string]string{
-		"/official/search":      `{"response":{"hits":[{"result":{"primary_artist":{"id":1,"name":"Группа"}}}]}}`,
-		"/official/artists/1":   `{"response":{"artist":{"id":1,"name":"Группа","image_url":""}}}`,
-		"/web/artists/1/albums": `{"response":{"albums":[{"id":2,"name":"Альбом"}],"next_page":null}}`,
-		"/web/albums/2":         `{"response":{"album":{"id":2,"name":"Альбом","release_date":"2001"}}}`,
-		"/web/albums/2/tracks": `{"response":{"tracks":[
-			{"number":1,"song":{"id":3,"title":"Первый"}},
-			{"number":2,"song":{"id":4,"title":"Второй, с запятой"}}],"next_page":null}}`,
-		"/official/artists/1/songs": `{"response":{"songs":[{"id":3},{"id":4}],"next_page":null}}`,
-		"/official/songs/3":         `{"response":{"song":{"id":3,"title":"Первый","album":{"id":2},"media":[]}}}`,
+		"/official/search":          `{"response":{"hits":[{"result":{"primary_artist":{"id":1,"name":"Группа"}}}]}}`,
+		"/official/artists/1":       `{"response":{"artist":{"id":1,"name":"Группа","image_url":""}}}`,
+		"/web/artists/1/albums":     `{"response":{"albums":[{"id":2,"name":"Альбом","type":"Album"}],"next_page":null}}`,
+		"/web/albums/2":             `{"response":{"album":{"id":2,"name":"Альбом","release_date":"2001"}}}`,
+		"/official/artists/1/songs": `{"response":{"songs":[{"id":3,"title":"Первый"},{"id":4,"title":"Второй"}]}}`,
 	}
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -269,13 +265,8 @@ func TestGeniusCatalog(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if len(c.Tracks) != 1 || len(c.Albums) != 1 || !c.Albums[0].Complete || len(c.Tracks[0].Media) != 0 {
-		t.Fatalf("каталог или ограничение треков неверны: %+v", c)
-	}
-
-	rows, err := csv.NewReader(strings.NewReader(c.Albums[0].TrackList)).ReadAll()
-	if err != nil || len(rows) != 3 || rows[2][1] != "Второй, с запятой" {
-		t.Fatalf("CSV не содержит полный список: %+v, %v", rows, err)
+	if len(c.Tracks) != 1 || len(c.Albums) != 1 || c.Albums[0].ReleaseDate != "2001" || c.Albums[0].TrackList != "" {
+		t.Fatalf("неверный каталог: %+v", c)
 	}
 }
 
@@ -303,7 +294,10 @@ func TestCatalogFallbackWhenWebForbidden(t *testing.T) {
 	id := int64(1)
 
 	c, err := g.Catalog(t.Context(), Lookup{GeniusID: &id, TrackLimit: 1})
-	if err != nil || len(c.Tracks) != 1 || len(c.Albums) != 1 || c.Albums[0].Complete || len(c.Warnings) == 0 {
+
+	var httpErr *HTTPError
+
+	if !errors.As(err, &httpErr) || httpErr.Status != http.StatusForbidden || len(c.Tracks) != 1 || len(c.Albums) != 0 {
 		t.Fatalf("не сохранены частичные данные: %+v, %v", c, err)
 	}
 }

@@ -67,38 +67,26 @@ func (r PackRepository) SaveRoundResult(ctx context.Context, result RoundResult)
 	return false, nil
 }
 
-// Popularity хранит оценку и число прошлых показов заблокированной строки каталога.
-type Popularity struct {
-	Points   float64
-	GuessNum int
-	table    string
-	id       uuid.UUID
-}
+// CountAnswer засчитывает вопрос исполнителю и при наличии треку или альбому.
+func (r PackRepository) CountAnswer(ctx context.Context, q domain.Question, correct bool) error {
+	const increment = " SET asked=asked+1,guessed=guessed+$2::integer,updated_at=now() WHERE id=$1"
 
-// LockPopularity читает исполнителя, затем при наличии — цель вопроса, под блокировкой обновления.
-func (r PackRepository) LockPopularity(ctx context.Context, q domain.Question) ([]Popularity, error) {
-	items := []Popularity{{table: "artists", id: q.ArtistID}}
+	var guessed int
+	if correct {
+		guessed = 1
+	}
+
+	if err := execute(ctx, r.db, "UPDATE artists"+increment, []any{q.ArtistID, guessed}); err != nil {
+		return err
+	}
+
 	if q.TrackID != nil {
-		items = append(items, Popularity{table: "tracks", id: *q.TrackID})
+		return execute(ctx, r.db, "UPDATE tracks"+increment, []any{*q.TrackID, guessed})
 	}
 
 	if q.AlbumID != nil {
-		items = append(items, Popularity{table: "albums", id: *q.AlbumID})
+		return execute(ctx, r.db, "UPDATE albums"+increment, []any{*q.AlbumID, guessed})
 	}
 
-	for i := range items {
-		p := &items[i]
-		if err := r.db.QueryRow(ctx, "SELECT points,guess_num FROM "+p.table+" WHERE id=$1 FOR NO KEY UPDATE",
-			p.id).Scan(&p.Points, &p.GuessNum); err != nil {
-			return nil, translate(err)
-		}
-	}
-
-	return items, nil
-}
-
-// UpdatePopularity сохраняет оценку и засчитывает показ объекта в раунде.
-func (r PackRepository) UpdatePopularity(ctx context.Context, p Popularity) error {
-	return execute(ctx, r.db, "UPDATE "+p.table+" SET points=$2,guess_num=guess_num+1,updated_at=now() WHERE id=$1",
-		[]any{p.id, p.Points})
+	return nil
 }

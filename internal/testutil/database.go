@@ -18,6 +18,25 @@ import (
 func Database(t *testing.T) (*pgxpool.Pool, *store.UnitOfWork) {
 	t.Helper()
 
+	pool := DatabaseUnmigrated(t)
+	ctx := t.Context()
+	uow := store.New(pool)
+
+	if err := uow.Migrate(ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := uow.Settings.Seed(ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	return pool, uow
+}
+
+// DatabaseUnmigrated создаёт пустую тестовую схему для проверки миграций.
+func DatabaseUnmigrated(t *testing.T) *pgxpool.Pool {
+	t.Helper()
+
 	dsn := os.Getenv("TEST_DATABASE_URL")
 	if dsn == "" {
 		t.Skip("для интеграционного теста требуется TEST_DATABASE_URL")
@@ -60,14 +79,5 @@ func Database(t *testing.T) (*pgxpool.Pool, *store.UnitOfWork) {
 
 	t.Cleanup(pool.Close)
 
-	uow := store.New(pool)
-	if err := uow.Migrate(ctx); err != nil {
-		t.Fatal(err)
-	}
-
-	if err := uow.Settings.Seed(ctx); err != nil {
-		t.Fatal(err)
-	}
-
-	return pool, uow
+	return pool
 }

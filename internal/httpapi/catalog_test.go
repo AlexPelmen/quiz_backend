@@ -52,9 +52,9 @@ func TestUploadedMP3BecomesPreferred(t *testing.T) {
 
 	var tracks []domain.TrackWithStatus
 
-	decodeResult(t, call("GET", "/api/v1/tracks?status=finished", "", 200), &tracks)
+	decodeResult(t, call("GET", "/api/v1/tracks?audio_status=finished", "", 200), &tracks)
 
-	if len(tracks) != 1 || tracks[0].Status != "finished" {
+	if len(tracks) != 1 || tracks[0].AudioStatus != "finished" {
 		t.Fatalf("не найден трек с готовой записью: %+v", tracks)
 	}
 
@@ -70,6 +70,29 @@ func TestUploadedMP3BecomesPreferred(t *testing.T) {
 	got := call("GET", "/api/v1/downloads/"+old.ID.String()+"/file", "", 200)
 	if !bytes.Equal(got, audio) {
 		t.Fatal("предыдущая запись стала недоступна после замены")
+	}
+}
+
+func TestArtistDeletionWithLinkedCatalog(t *testing.T) {
+	pool, uow := testutil.Database(t)
+	seedHTTPTrack(t, pool, 1)
+
+	var artistID uuid.UUID
+	if err := pool.QueryRow(t.Context(), "SELECT id FROM artists").Scan(&artistID); err != nil {
+		t.Fatal(err)
+	}
+
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	call := client(t, httpapi.Router(service.New(uow, logger, ""), logger))
+	call("DELETE", "/api/v1/artists/"+artistID.String(), "", 204)
+
+	var artists, albums, tracks, files int
+
+	err := pool.QueryRow(t.Context(), `SELECT (SELECT count(*) FROM artists), (SELECT count(*) FROM albums),
+        (SELECT count(*) FROM tracks), (SELECT count(*) FROM downloads)`).Scan(&artists, &albums, &tracks, &files)
+	if err != nil || artists != 0 || albums != 0 || tracks != 0 || files != 2 {
+		t.Fatalf("связанные записи: %d исполнителей, %d альбомов, %d треков, %d файлов, %v",
+			artists, albums, tracks, files, err)
 	}
 }
 

@@ -63,7 +63,7 @@
             "schema": {
               "enum": [
                 "name",
-                "points",
+                "yt_plays",
                 "created_at",
                 "status"
               ]
@@ -158,12 +158,6 @@
                       "type": "string"
                     }
                   },
-                  "points": {
-                    "type": "number",
-                    "minimum": 0,
-                    "maximum": 100,
-                    "default": 100
-                  },
                   "full_name": {
                     "type": "string"
                   },
@@ -175,6 +169,19 @@
                     "items": {
                       "type": "string"
                     }
+                  },
+                  "yt_plays": {
+                    "type": "integer",
+                    "format": "int64",
+                    "minimum": 0
+                  },
+                  "excluded_from_quiz": {
+                    "type": "boolean"
+                  },
+                  "yt_subs": {
+                    "type": "integer",
+                    "format": "int64",
+                    "minimum": 0
                   }
                 },
                 "additionalProperties": false,
@@ -326,12 +333,6 @@
                       "type": "string"
                     }
                   },
-                  "points": {
-                    "type": "number",
-                    "minimum": 0,
-                    "maximum": 100,
-                    "default": 100
-                  },
                   "full_name": {
                     "type": "string"
                   },
@@ -351,6 +352,19 @@
                       "created"
                     ],
                     "description": "manual исключает исполнителя из очереди, created возвращает"
+                  },
+                  "yt_plays": {
+                    "type": "integer",
+                    "format": "int64",
+                    "minimum": 0
+                  },
+                  "excluded_from_quiz": {
+                    "type": "boolean"
+                  },
+                  "yt_subs": {
+                    "type": "integer",
+                    "format": "int64",
+                    "minimum": 0
                   }
                 },
                 "additionalProperties": false
@@ -498,8 +512,9 @@
             "schema": {
               "enum": [
                 "name",
-                "points",
+                "yt_plays",
                 "created_at",
+                "status",
                 "release_date"
               ]
             }
@@ -514,6 +529,17 @@
                 "desc"
               ],
               "default": "asc"
+            }
+          },
+          {
+            "name": "status",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "parsed",
+                "manual"
+              ]
             }
           }
         ],
@@ -591,12 +617,6 @@
                     "type": "string",
                     "format": "uuid"
                   },
-                  "points": {
-                    "type": "number",
-                    "minimum": 0,
-                    "maximum": 100,
-                    "default": 100
-                  },
                   "release_date": {
                     "type": "string"
                   },
@@ -605,6 +625,18 @@
                     "items": {
                       "type": "string"
                     }
+                  },
+                  "yt_plays": {
+                    "type": "integer",
+                    "format": "int64",
+                    "minimum": 0
+                  },
+                  "excluded_from_quiz": {
+                    "type": "boolean"
+                  },
+                  "track_list": {
+                    "type": "string",
+                    "description": "Треклист CSV с заголовком position,title"
                   }
                 },
                 "additionalProperties": false,
@@ -751,12 +783,6 @@
                     "minLength": 1,
                     "maxLength": 1000
                   },
-                  "points": {
-                    "type": "number",
-                    "minimum": 0,
-                    "maximum": 100,
-                    "default": 100
-                  },
                   "release_date": {
                     "type": "string"
                   },
@@ -765,6 +791,18 @@
                     "items": {
                       "type": "string"
                     }
+                  },
+                  "yt_plays": {
+                    "type": "integer",
+                    "format": "int64",
+                    "minimum": 0
+                  },
+                  "excluded_from_quiz": {
+                    "type": "boolean"
+                  },
+                  "track_list": {
+                    "type": "string",
+                    "description": "Треклист CSV с заголовком position,title"
                   }
                 },
                 "additionalProperties": false
@@ -916,16 +954,12 @@
           {
             "name": "status",
             "in": "query",
-            "description": "Состояние аудиозаписей трека",
+            "description": "Статус полноты каталога",
             "schema": {
+              "type": "string",
               "enum": [
-                "finished",
-                "processing",
-                "pending",
-                "created",
-                "errored",
-                "manual",
-                "missing"
+                "parsed",
+                "manual"
               ]
             }
           },
@@ -936,9 +970,10 @@
             "schema": {
               "enum": [
                 "name",
-                "points",
+                "yt_plays",
                 "created_at",
-                "status"
+                "status",
+                "audio_status"
               ]
             }
           },
@@ -952,6 +987,22 @@
                 "desc"
               ],
               "default": "asc"
+            }
+          },
+          {
+            "name": "audio_status",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "created",
+                "pending",
+                "processing",
+                "finished",
+                "errored",
+                "manual",
+                "missing"
+              ]
             }
           }
         ],
@@ -1031,19 +1082,27 @@
                   },
                   "album_id": {
                     "type": "string",
-                    "format": "uuid"
-                  },
-                  "points": {
-                    "type": "number",
-                    "minimum": 0,
-                    "maximum": 100,
-                    "default": 100
+                    "format": "uuid",
+                    "description": "UUID альбома. Нулевой UUID удаляет связь."
                   },
                   "tags": {
                     "type": "array",
                     "items": {
                       "type": "string"
                     }
+                  },
+                  "yt_plays": {
+                    "type": "integer",
+                    "format": "int64",
+                    "minimum": 0
+                  },
+                  "excluded_from_quiz": {
+                    "type": "boolean"
+                  },
+                  "duration_seconds": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 2147483647
                   }
                 },
                 "additionalProperties": false,
@@ -1190,17 +1249,29 @@
                     "minLength": 1,
                     "maxLength": 1000
                   },
-                  "points": {
-                    "type": "number",
-                    "minimum": 0,
-                    "maximum": 100,
-                    "default": 100
-                  },
                   "tags": {
                     "type": "array",
                     "items": {
                       "type": "string"
                     }
+                  },
+                  "yt_plays": {
+                    "type": "integer",
+                    "format": "int64",
+                    "minimum": 0
+                  },
+                  "excluded_from_quiz": {
+                    "type": "boolean"
+                  },
+                  "duration_seconds": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 2147483647
+                  },
+                  "album_id": {
+                    "type": "string",
+                    "format": "uuid",
+                    "description": "UUID альбома. Нулевой UUID удаляет связь."
                   }
                 },
                 "additionalProperties": false
@@ -1607,6 +1678,22 @@
               }
             }
           }
+        },
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "refresh": {
+                    "type": "boolean",
+                    "description": "Поставить ранее обработанных исполнителей в очередь повторно."
+                  }
+                }
+              }
+            }
+          }
         }
       }
     },
@@ -1786,7 +1873,7 @@
                   },
                   "difficulty": {
                     "type": "string",
-                    "description": "Центр отбора по известности: easy — 80, medium — 50, hard — 20. Стандартное отклонение — 15.",
+                    "description": "Центр отбора по позициям списка: easy — 20%, medium — 50%, hard — 80%. Стандартное отклонение — 15% длины списка.",
                     "enum": [
                       "easy",
                       "medium",
@@ -2180,7 +2267,7 @@
         }
       ],
       "post": {
-        "summary": "Повторить ошибку или указать ручной источник",
+        "summary": "Запустить прямую ссылку для ожидающей или ошибочной загрузки",
         "requestBody": {
           "required": false,
           "content": {
@@ -2541,7 +2628,7 @@
     "/api/v1/quiz-rounds/{id}/results": {
       "post": {
         "summary": "Сохранить результат завершённого раунда",
-        "description": "Повтор с тем же attempt_id и теми же ответами не меняет известность второй раз.",
+        "description": "Повтор с тем же attempt_id и теми же ответами не увеличивает счётчики второй раз.",
         "parameters": [
           {
             "name": "id",
@@ -3470,9 +3557,9 @@
         }
       }
     },
-    "/api/v1/downloads/retry-youtube": {
+    "/api/v1/downloads/start": {
       "post": {
-        "summary": "Retry failed YouTube downloads",
+        "summary": "Поставить выбранные задания в очередь указанного загрузчика",
         "responses": {
           "201": {
             "description": "Number queued",
@@ -3496,6 +3583,218 @@
           },
           "500": {
             "description": "Internal error"
+          },
+          "400": {
+            "description": "Неверная форма или пустой выбор",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Хотя бы одно задание недоступно для выбранного загрузчика",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "downloader",
+                  "download_ids"
+                ],
+                "properties": {
+                  "downloader": {
+                    "type": "string",
+                    "enum": [
+                      "yt_music",
+                      "hitmo",
+                      "genius_youtube",
+                      "genius_short",
+                      "image"
+                    ]
+                  },
+                  "download_ids": {
+                    "type": "array",
+                    "minItems": 1,
+                    "maxItems": 200,
+                    "uniqueItems": true,
+                    "items": {
+                      "type": "string",
+                      "format": "uuid"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/parsing-runs/{id}/events": {
+      "get": {
+        "summary": "Получить последние события запуска",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 200,
+              "default": 50
+            }
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "default": 0
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "События от новых к старым",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/ParseEvent"
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Запуск не найден",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/album-cleanup": {
+      "get": {
+        "summary": "Предпросмотр альбомов вне актуальной пятёрки YouTube Music",
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 200,
+              "default": 50
+            }
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "default": 0
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Кандидаты на удаление",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/AlbumCleanupRow"
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "summary": "Удалить явно выбранные альбомы, пригодные для очистки",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "ids"
+                ],
+                "additionalProperties": false,
+                "properties": {
+                  "ids": {
+                    "type": "array",
+                    "uniqueItems": true,
+                    "minItems": 1,
+                    "maxItems": 200,
+                    "items": {
+                      "type": "string",
+                      "format": "uuid"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "204": {
+            "description": "Выбранные альбомы удалены"
+          },
+          "400": {
+            "description": "Некорректный выбор",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Активен парсинг или выбранный альбом больше недоступен для удаления",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
           }
         }
       }
@@ -3560,17 +3859,6 @@
               "type": "string"
             }
           },
-          "points": {
-            "type": "number",
-            "minimum": 0,
-            "maximum": 100,
-            "default": 100
-          },
-          "guess_num": {
-            "type": "integer",
-            "minimum": 0,
-            "readOnly": true
-          },
           "genius_id": {
             "anyOf": [
               {
@@ -3600,6 +3888,50 @@
           "updated_at": {
             "type": "string",
             "format": "date-time"
+          },
+          "yt_plays": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "minimum": 0
+          },
+          "asked": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "guessed": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "excluded_from_quiz": {
+            "type": "boolean"
+          },
+          "yt_music_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "missing_fields": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "yt_subs": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "minimum": 0
+          },
+          "members_known": {
+            "type": "boolean"
           }
         },
         "additionalProperties": false
@@ -3632,17 +3964,6 @@
           "release_date": {
             "type": "string"
           },
-          "points": {
-            "type": "number",
-            "minimum": 0,
-            "maximum": 100,
-            "default": 100
-          },
-          "guess_num": {
-            "type": "integer",
-            "minimum": 0,
-            "readOnly": true
-          },
           "genius_id": {
             "anyOf": [
               {
@@ -3673,6 +3994,49 @@
             "items": {
               "type": "string"
             }
+          },
+          "yt_plays": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "minimum": 0
+          },
+          "asked": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "guessed": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "excluded_from_quiz": {
+            "type": "boolean"
+          },
+          "yt_music_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "missing_fields": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "parsed",
+              "manual"
+            ]
+          },
+          "musicbrainz_id": {
+            "type": "string"
           }
         },
         "additionalProperties": false
@@ -3702,17 +4066,6 @@
               }
             ]
           },
-          "points": {
-            "type": "number",
-            "minimum": 0,
-            "maximum": 100,
-            "default": 100
-          },
-          "guess_num": {
-            "type": "integer",
-            "minimum": 0,
-            "readOnly": true
-          },
           "genius_id": {
             "anyOf": [
               {
@@ -3732,15 +4085,10 @@
             "format": "date-time"
           },
           "status": {
-            "description": "Состояние наиболее готовой записи. Возвращается при чтении трека.",
+            "type": "string",
             "enum": [
-              "finished",
-              "processing",
-              "pending",
-              "created",
-              "errored",
-              "manual",
-              "missing"
+              "parsed",
+              "manual"
             ]
           },
           "tags": {
@@ -3748,6 +4096,62 @@
             "items": {
               "type": "string"
             }
+          },
+          "yt_plays": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "minimum": 0
+          },
+          "asked": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "guessed": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "excluded_from_quiz": {
+            "type": "boolean"
+          },
+          "yt_music_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "missing_fields": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "musicbrainz_id": {
+            "type": "string"
+          },
+          "audio_status": {
+            "type": "string",
+            "enum": [
+              "created",
+              "pending",
+              "processing",
+              "finished",
+              "errored",
+              "manual",
+              "missing"
+            ]
+          },
+          "duration_seconds": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 1,
+            "maximum": 2147483647
           }
         },
         "additionalProperties": false
@@ -3808,6 +4212,21 @@
           "updated_at": {
             "type": "string",
             "format": "date-time"
+          },
+          "downloader": {
+            "type": "string",
+            "enum": [
+              "",
+              "yt_music",
+              "hitmo",
+              "genius_youtube",
+              "genius_short",
+              "image",
+              "direct"
+            ]
+          },
+          "preview": {
+            "type": "boolean"
           }
         },
         "additionalProperties": false
@@ -4050,12 +4469,6 @@
               "type": "string"
             }
           },
-          "points": {
-            "type": "number",
-            "minimum": 0,
-            "maximum": 100,
-            "default": 100
-          },
           "full_name": {
             "type": "string"
           },
@@ -4075,6 +4488,19 @@
               "created"
             ],
             "description": "Только PATCH: manual исключает исполнителя из очереди; created возвращает."
+          },
+          "yt_plays": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "excluded_from_quiz": {
+            "type": "boolean"
+          },
+          "yt_subs": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
           }
         },
         "additionalProperties": false
@@ -4091,12 +4517,6 @@
             "type": "string",
             "format": "uuid"
           },
-          "points": {
-            "type": "number",
-            "minimum": 0,
-            "maximum": 100,
-            "default": 100
-          },
           "release_date": {
             "type": "string"
           },
@@ -4105,6 +4525,18 @@
             "items": {
               "type": "string"
             }
+          },
+          "yt_plays": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "excluded_from_quiz": {
+            "type": "boolean"
+          },
+          "track_list": {
+            "type": "string",
+            "description": "Треклист CSV с заголовком position,title"
           }
         },
         "additionalProperties": false
@@ -4123,19 +4555,27 @@
           },
           "album_id": {
             "type": "string",
-            "format": "uuid"
-          },
-          "points": {
-            "type": "number",
-            "minimum": 0,
-            "maximum": 100,
-            "default": 100
+            "format": "uuid",
+            "description": "UUID альбома. Нулевой UUID удаляет связь."
           },
           "tags": {
             "type": "array",
             "items": {
               "type": "string"
             }
+          },
+          "yt_plays": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "excluded_from_quiz": {
+            "type": "boolean"
+          },
+          "duration_seconds": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 2147483647
           }
         },
         "additionalProperties": false
@@ -4203,25 +4643,6 @@
       "Settings": {
         "type": "object",
         "properties": {
-          "k_parse": {
-            "type": "number",
-            "minimum": 0,
-            "maximum": 100,
-            "default": 0.1
-          },
-          "k_popularity": {
-            "type": "number",
-            "minimum": 0,
-            "maximum": 100,
-            "default": 20
-          },
-          "min_popularity_delta": {
-            "type": "number",
-            "minimum": 0,
-            "maximum": 100,
-            "default": 1,
-            "description": "Минимальный модуль ненулевой дельты после затухания. 0 отключает минимум."
-          },
           "poll_seconds": {
             "type": "integer",
             "minimum": 1,
@@ -4281,11 +4702,6 @@
             "type": "string",
             "minLength": 1
           },
-          "source": {
-            "enum": [
-              "genius"
-            ]
-          },
           "round_types": {
             "type": "array",
             "minItems": 10,
@@ -4317,13 +4733,15 @@
             "minimum": 1,
             "maximum": 3600,
             "type": "integer",
-            "default": 30
+            "default": 1,
+            "description": "Начальная пауза для повторов Genius при HTTP 429 и MusicBrainz при HTTP 503."
           },
           "source_429_max_delay_seconds": {
             "minimum": 1,
             "maximum": 3600,
             "type": "integer",
-            "default": 300
+            "default": 3,
+            "description": "Максимальная пауза между повторами Genius и MusicBrainz."
           },
           "genius_request_interval_ms": {
             "minimum": 100,
@@ -4335,7 +4753,33 @@
             "minimum": 0,
             "maximum": 10,
             "type": "integer",
-            "default": 3
+            "default": 3,
+            "description": "Число повторов Genius и MusicBrainz. Адаптеры выполняют максимум три повтора."
+          },
+          "quiz_guess_rate_enabled": {
+            "type": "boolean",
+            "default": true
+          },
+          "quiz_guess_rate_asked_threshold": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0,
+            "default": 5,
+            "description": "Доля правильных ответов применяется при asked выше порога."
+          },
+          "yt_music_python": {
+            "type": "string",
+            "default": "python3"
+          },
+          "hitmo_url": {
+            "type": "string",
+            "format": "uri",
+            "default": "https://rus.hitmos.fm"
+          },
+          "cover_art_archive_url": {
+            "type": "string",
+            "format": "uri",
+            "default": "https://coverartarchive.org"
           }
         },
         "additionalProperties": false
@@ -4448,6 +4892,47 @@
             "items": {
               "$ref": "#/components/schemas/CoverRectangle"
             }
+          }
+        }
+      },
+      "ParseEvent": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "artist": {
+            "type": "string"
+          },
+          "stage": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "AlbumCleanupRow": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "album": {
+            "type": "string"
+          },
+          "artist": {
+            "type": "string"
+          },
+          "protected": {
+            "type": "boolean",
+            "description": "Альбом используется сохранённым квизом."
           }
         }
       }

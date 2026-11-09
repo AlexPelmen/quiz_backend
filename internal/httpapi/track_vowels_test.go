@@ -22,7 +22,8 @@ func TestTrackVowelsRound(t *testing.T) {
 
 	if _, err := pool.Exec(t.Context(), `UPDATE tracks t SET name = v.title FROM artists a JOIN (VALUES
 		('Исполнитель 0','АУ (Live (2020))'), ('Исполнитель 1','ЪЬ'), ('Исполнитель 2','AEIOUY')
-	) AS v(artist,title) ON a.name=v.artist WHERE a.id=t.artist_id`); err != nil {
+	) AS v(artist,title) ON a.name=v.artist
+    JOIN artist_to_track owner ON owner.artist_id=a.id WHERE owner.track_id=t.id`); err != nil {
 		t.Fatal(err)
 	}
 
@@ -32,11 +33,16 @@ func TestTrackVowelsRound(t *testing.T) {
 
 	// У десятого исполнителя есть и подходящий трек, и трек без согласных с гораздо большим весом.
 	if _, err := pool.Exec(t.Context(), `WITH updated AS (
-		UPDATE tracks SET name='ЁЛКА — HELLO!', points=1e-9 WHERE name='АУ (Live (2020))' RETURNING id,artist_id
+		UPDATE tracks SET name='ЁЛКА — HELLO!', yt_plays=1 WHERE name='АУ (Live (2020))' RETURNING id
 	), extra AS (
-		INSERT INTO tracks(id,name,artist_id) SELECT gen_random_uuid(),'АУ',artist_id FROM updated RETURNING id
-	) INSERT INTO track_to_download(track_id,download_id)
-		SELECT extra.id,td.download_id FROM extra,updated JOIN track_to_download td ON td.track_id=updated.id`); err != nil {
+		INSERT INTO tracks(id,name,yt_plays) SELECT gen_random_uuid(),'АУ',100000 FROM updated RETURNING id
+	), linked AS (
+        INSERT INTO artist_to_track(track_id,artist_id)
+        SELECT extra.id,owner.artist_id FROM extra,updated JOIN artist_to_track owner ON owner.track_id=updated.id
+        RETURNING track_id
+    ) INSERT INTO track_to_download(track_id,download_id)
+		SELECT linked.track_id,td.download_id
+            FROM linked,updated JOIN track_to_download td ON td.track_id=updated.id`); err != nil {
 		t.Fatal(err)
 	}
 

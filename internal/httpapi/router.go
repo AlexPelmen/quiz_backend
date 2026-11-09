@@ -65,8 +65,11 @@ func Router(app *service.App, logger *slog.Logger) *gin.Engine {
 	v1.POST("/artists/:id/retry", h.retryArtist)
 	v1.POST("/parsing-runs", h.startParsing)
 	v1.POST("/parsing-runs/:id/stop", h.stopParsing)
+	v1.GET("/parsing-runs/:id/events", h.parseEvents)
+	v1.GET("/album-cleanup", h.albumCleanupPreview)
+	v1.POST("/album-cleanup", h.cleanupAlbums)
 	v1.POST("/downloads/:id/retry", h.retryDownload)
-	v1.POST("/downloads/retry-youtube", h.retryYouTubeDownloads)
+	v1.POST("/downloads/start", h.startDownloads)
 	v1.GET("/downloads/:id/file", h.file)
 	v1.GET("/quiz-packs/:id/questions/:number/audio", h.audio)
 	v1.POST("/quiz-rounds/:id/results", h.recordRoundResult)
@@ -140,7 +143,7 @@ func requestID(c *gin.Context) (*uuid.UUID, error) {
 }
 
 func page(c *gin.Context) (domain.Page, error) {
-	p := domain.Page{Limit: 50, Status: c.Query("status"), Tag: c.Query("tag")}
+	p := domain.Page{Limit: 50, Status: c.Query("status"), AudioStatus: c.Query("audio_status"), Tag: c.Query("tag")}
 	for key, target := range map[string]*int{"limit": &p.Limit, "offset": &p.Offset} {
 		if raw := c.Query(key); raw != "" {
 			n, err := strconv.Atoi(raw)
@@ -211,10 +214,12 @@ func validCatalogSort(resource string, p domain.Page) bool {
 	}
 
 	switch p.Sort {
-	case "", "name", "points", "created_at":
+	case "", "name", "yt_plays", "created_at":
 		return true
 	case "status":
-		return resource == "artists" || resource == "tracks"
+		return true
+	case "audio_status":
+		return resource == "tracks"
 	case "release_date":
 		return resource == "albums"
 	default:
@@ -385,7 +390,18 @@ func (a *api) remove(resource string) gin.HandlerFunc {
 }
 
 func (a *api) startParsing(c *gin.Context) {
-	value, err := a.app.StartParsing(c.Request.Context())
+	var form struct {
+		Refresh bool `json:"refresh"`
+	}
+
+	if c.Request.ContentLength != 0 {
+		if err := decode(c, &form); err != nil {
+			a.respond(c, nil, err)
+			return
+		}
+	}
+
+	value, err := a.app.StartParsing(c.Request.Context(), form.Refresh)
 	if err != nil {
 		a.respond(c, nil, err)
 		return
@@ -394,12 +410,59 @@ func (a *api) startParsing(c *gin.Context) {
 	c.JSON(http.StatusAccepted, value)
 }
 
+func (a *api) parseEvents(c *gin.Context) {
+	id, err := requestID(c)
+	if err != nil {
+		a.respond(c, nil, err)
+		return
+	}
+
+	p, err := page(c)
+	if err != nil {
+		a.respond(c, nil, err)
+		return
+	}
+
+	events, err := a.app.ParseEvents(c.Request.Context(), *id, p)
+	a.respond(c, events, err)
+}
+
+func (a *api) albumCleanupPreview(c *gin.Context) {
+	p, err := page(c)
+	if err != nil {
+		a.respond(c, nil, err)
+		return
+	}
+
+	rows, err := a.app.AlbumCleanupPreview(c.Request.Context(), p)
+	a.respond(c, rows, err)
+}
+
+func (a *api) cleanupAlbums(c *gin.Context) {
+	var form struct {
+		IDs []uuid.UUID `json:"ids"`
+	}
+
+	if err := decode(c, &form); err != nil {
+		a.respond(c, nil, err)
+		return
+	}
+
+	if err := a.app.CleanupAlbums(c.Request.Context(), form.IDs); err != nil {
+		a.respond(c, nil, err)
+		return
+	}
+
+	c.Status(http.StatusNoContent)
+}
+
 func (a *api) stopParsing(c *gin.Context) {
 	id, err := requestID(c)
 	if err != nil {
 		a.respond(c, nil, err)
 		return
 	}
+
 	value, err := a.app.StopParsing(c.Request.Context(), *id)
 	a.respond(c, value, err)
 }
@@ -418,8 +481,14 @@ func (a *api) retryArtist(c *gin.Context) {
 	c.Status(http.StatusNoContent)
 }
 
-func (a *api) retryYouTubeDownloads(c *gin.Context) {
-	count, err := a.app.RetryYouTubeDownloads(c.Request.Context())
+func (a *api) startDownloads(c *gin.Context) {
+	var form service.StartDownloadsForm
+	if err := decode(c, &form); err != nil {
+		a.respond(c, nil, err)
+		return
+	}
+
+	count, err := a.app.StartDownloads(c.Request.Context(), form)
 	a.respond(c, gin.H{"queued": count}, err)
 }
 

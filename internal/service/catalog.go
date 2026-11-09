@@ -4,9 +4,11 @@ package service
 import (
 	"bytes"
 	"context"
+	"encoding/csv"
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"math"
 	"slices"
 	"strings"
 	"unicode/utf8"
@@ -89,7 +91,9 @@ func (a *App) readOne(ctx context.Context, resource string, id uuid.UUID) (any, 
 func (a *App) Delete(ctx context.Context, resource string, id uuid.UUID) error {
 	switch resource {
 	case "artists":
-		return a.uow.Artists.Delete(ctx, id)
+		return a.uow.Transaction(ctx, func(tx *store.UnitOfWork) error {
+			return tx.Artists.Delete(ctx, id)
+		})
 	case "albums":
 		return a.uow.Albums.Delete(ctx, id)
 	case "tracks":
@@ -103,13 +107,15 @@ func (a *App) Delete(ctx context.Context, resource string, id uuid.UUID) error {
 
 // ArtistForm поддерживает создание и частичное обновление исполнителя.
 type ArtistForm struct {
-	Status   *string   `json:"status"`
-	Name     *string   `json:"name"`
-	Tags     *[]string `json:"tags"`
-	Points   *float64  `json:"points"`
-	FullName *string   `json:"full_name"`
-	Country  *string   `json:"country"`
-	Artists  *[]string `json:"artists"`
+	Status           *string   `json:"status"`
+	Name             *string   `json:"name"`
+	Tags             *[]string `json:"tags"`
+	YtPlays          *int64    `json:"yt_plays"`
+	YtSubs           *int64    `json:"yt_subs"`
+	ExcludedFromQuiz *bool     `json:"excluded_from_quiz"`
+	FullName         *string   `json:"full_name"`
+	Country          *string   `json:"country"`
+	Artists          *[]string `json:"artists"`
 }
 
 // SaveArtist создаёт исполнителя либо применяет непустые поля формы.
@@ -121,7 +127,7 @@ func (a *App) SaveArtist(ctx context.Context, id *uuid.UUID, f ArtistForm) (doma
 			return fmt.Errorf("%w: статус можно изменить на manual или created", domain.ErrInvalid)
 		}
 
-		r := domain.Artist{ID: uuid.New(), Points: 100, Tags: []string{}}
+		r := domain.Artist{ID: uuid.New(), Tags: []string{}}
 
 		if id != nil {
 			var err error
@@ -138,22 +144,23 @@ func (a *App) SaveArtist(ctx context.Context, id *uuid.UUID, f ArtistForm) (doma
 
 		applyArtist(&r, f)
 
-		if err := validateNamePoints(r.Name, r.Points); err != nil {
+		if err := validateCatalogName(r.Name); err != nil {
 			return err
+		}
+
+		if f.YtPlays != nil && *f.YtPlays < 0 || f.YtSubs != nil && *f.YtSubs < 0 {
+			return fmt.Errorf("%w: метрики YouTube не могут быть отрицательными", domain.ErrInvalid)
 		}
 
 		var err error
 		if id == nil {
 			result, err = tx.Artists.Create(ctx, r)
-			if err == nil && (f.FullName != nil || f.Country != nil || f.Artists != nil) {
-				r.ID = result.ID
-				result, err = tx.Artists.Update(ctx, r)
-			}
 		} else {
 			result, err = tx.Artists.Update(ctx, r)
 			if err == nil && f.Status != nil {
-				err = tx.Artists.SetStatus(ctx, r.ID, *f.Status)
-				result.Status = *f.Status
+				if err = tx.Artists.SetStatus(ctx, r.ID, *f.Status); err == nil {
+					result, err = tx.Artists.Get(ctx, r.ID)
+				}
 			}
 		}
 
@@ -168,8 +175,23 @@ func applyArtist(r *domain.Artist, f ArtistForm) {
 		r.Name = strings.TrimSpace(*f.Name)
 	}
 
-	if f.Points != nil {
-		r.Points = *f.Points
+	if f.ExcludedFromQuiz != nil {
+		r.ExcludedFromQuiz = *f.ExcludedFromQuiz
+	}
+
+	if f.YtPlays != nil {
+		r.YtPlays = f.YtPlays
+		markManual(&r.ManualFields, "yt_plays")
+	}
+
+	if f.YtSubs != nil {
+		r.YtSubs = f.YtSubs
+		markManual(&r.ManualFields, "yt_subs")
+
+		if r.YtPlays == nil && *r.YtSubs >= 0 && *r.YtSubs <= math.MaxInt64/2 {
+			plays := *r.YtSubs * 2
+			r.YtPlays = &plays
+		}
 	}
 
 	if f.Tags != nil {
@@ -202,6 +224,8 @@ func applyArtist(r *domain.Artist, f ArtistForm) {
 
 	if f.Artists != nil {
 		r.Artists = *f.Artists
+		r.MembersKnown = true
+
 		if !slices.Contains(r.ManualFields, "artists") {
 			r.ManualFields = append(r.ManualFields, "artists")
 		}
@@ -210,24 +234,27 @@ func applyArtist(r *domain.Artist, f ArtistForm) {
 
 // CatalogForm задаёт поля создания или обновления альбома и трека.
 type CatalogForm struct {
-	Name        *string    `json:"name"`
-	Tags        *[]string  `json:"tags"`
-	Points      *float64   `json:"points"`
-	ArtistID    *uuid.UUID `json:"artist_id"`
-	AlbumID     *uuid.UUID `json:"album_id"`
-	ReleaseDate *string    `json:"release_date"`
+	Name             *string    `json:"name"`
+	Tags             *[]string  `json:"tags"`
+	YtPlays          *int64     `json:"yt_plays"`
+	ExcludedFromQuiz *bool      `json:"excluded_from_quiz"`
+	DurationSeconds  *int       `json:"duration_seconds"`
+	TrackList        *string    `json:"track_list"`
+	ArtistID         *uuid.UUID `json:"artist_id"`
+	AlbumID          *uuid.UUID `json:"album_id"`
+	ReleaseDate      *string    `json:"release_date"`
 }
 
 // SaveAlbum создаёт альбом либо изменяет его название, дату и оценку.
 func (a *App) SaveAlbum(ctx context.Context, id *uuid.UUID, f CatalogForm) (domain.Album, error) {
-	if f.AlbumID != nil || (id != nil && f.ArtistID != nil) {
+	if f.AlbumID != nil || f.DurationSeconds != nil || (id != nil && f.ArtistID != nil) {
 		return domain.Album{}, fmt.Errorf("%w: связь альбома нельзя изменить", domain.ErrInvalid)
 	}
 
 	var result domain.Album
 
 	err := a.uow.Transaction(ctx, func(tx *store.UnitOfWork) error {
-		r := domain.Album{ID: uuid.New(), Points: 100, Tags: []string{}}
+		r := domain.Album{ID: uuid.New(), Tags: []string{}}
 
 		if id != nil {
 			var err error
@@ -240,19 +267,26 @@ func (a *App) SaveAlbum(ctx context.Context, id *uuid.UUID, f CatalogForm) (doma
 			r.ArtistID = *f.ArtistID
 		}
 
-		applyNamePoints(&r.Name, &r.Points, f)
-
-		if f.Tags != nil {
-			r.Tags = *f.Tags
+		if err := f.apply(catalogEdit{&r.Name, &r.Tags, &r.YtPlays, &r.ExcludedFromQuiz, &r.ManualFields}); err != nil {
+			return err
 		}
 
 		if f.ReleaseDate != nil {
-			r.ReleaseDate = *f.ReleaseDate
+			r.ReleaseDate = strings.TrimSpace(*f.ReleaseDate)
 			r.ManualReleaseDate = true
 		}
 
-		if err := validateNamePoints(r.Name, r.Points); err != nil {
-			return err
+		if f.TrackList != nil {
+			r.TrackList = strings.TrimSpace(*f.TrackList)
+			if r.TrackList != "" {
+				rows, err := csv.NewReader(strings.NewReader(r.TrackList)).ReadAll()
+				if err != nil || len(rows) < 2 || !slices.Equal(rows[0], []string{"position", "title"}) {
+					return fmt.Errorf("%w: треклист должен быть CSV с заголовком position,title", domain.ErrInvalid)
+				}
+			}
+
+			r.TrackListComplete = r.TrackList != ""
+			markManual(&r.ManualFields, "track_list")
 		}
 
 		if r.ArtistID == uuid.Nil {
@@ -274,14 +308,14 @@ func (a *App) SaveAlbum(ctx context.Context, id *uuid.UUID, f CatalogForm) (doma
 
 // SaveTrack создаёт трек либо изменяет его название и оценку.
 func (a *App) SaveTrack(ctx context.Context, id *uuid.UUID, f CatalogForm) (domain.Track, error) {
-	if f.ReleaseDate != nil || (id != nil && (f.ArtistID != nil || f.AlbumID != nil)) {
+	if f.ReleaseDate != nil || f.TrackList != nil || (id != nil && f.ArtistID != nil) {
 		return domain.Track{}, fmt.Errorf("%w: недопустимое поле трека", domain.ErrInvalid)
 	}
 
 	var result domain.Track
 
 	err := a.uow.Transaction(ctx, func(tx *store.UnitOfWork) error {
-		r := domain.Track{ID: uuid.New(), Points: 100, Tags: []string{}}
+		r := domain.Track{ID: uuid.New(), Tags: []string{}}
 
 		if id != nil {
 			var err error
@@ -290,21 +324,29 @@ func (a *App) SaveTrack(ctx context.Context, id *uuid.UUID, f CatalogForm) (doma
 			if err != nil {
 				return err
 			}
-		} else {
-			if f.ArtistID != nil {
-				r.ArtistID = *f.ArtistID
+		} else if f.ArtistID != nil {
+			r.ArtistID = *f.ArtistID
+		}
+
+		if f.AlbumID != nil {
+			r.AlbumID = f.AlbumID
+			if *f.AlbumID == uuid.Nil {
+				r.AlbumID = nil
 			}
 
-			r.AlbumID = f.AlbumID
+			markManual(&r.ManualFields, "album_id")
 		}
 
-		applyNamePoints(&r.Name, &r.Points, f)
+		if f.DurationSeconds != nil {
+			if *f.DurationSeconds <= 0 || *f.DurationSeconds > math.MaxInt32 {
+				return fmt.Errorf("%w: длительность должна быть положительным числом секунд", domain.ErrInvalid)
+			}
 
-		if f.Tags != nil {
-			r.Tags = *f.Tags
+			r.DurationSeconds = f.DurationSeconds
+			markManual(&r.ManualFields, "duration_seconds")
 		}
 
-		if err := validateNamePoints(r.Name, r.Points); err != nil {
+		if err := f.apply(catalogEdit{&r.Name, &r.Tags, &r.YtPlays, &r.ExcludedFromQuiz, &r.ManualFields}); err != nil {
 			return err
 		}
 
@@ -312,9 +354,30 @@ func (a *App) SaveTrack(ctx context.Context, id *uuid.UUID, f CatalogForm) (doma
 			return fmt.Errorf("%w: artist_id обязателен", domain.ErrInvalid)
 		}
 
+		if f.AlbumID != nil && r.AlbumID != nil {
+			album, err := tx.Albums.Get(ctx, *r.AlbumID)
+			if err != nil {
+				return err
+			}
+
+			if album.ArtistID != r.ArtistID {
+				return fmt.Errorf("%w: альбом принадлежит другому исполнителю", domain.ErrInvalid)
+			}
+		}
+
 		var err error
 		if id == nil {
 			result, err = tx.Tracks.Create(ctx, r)
+			if err == nil {
+				artist, lookupErr := tx.Artists.Get(ctx, r.ArtistID)
+				if lookupErr != nil {
+					return lookupErr
+				}
+
+				if err = prepareAudio(ctx, tx, result, artist.Name); err == nil {
+					result, err = tx.Tracks.Get(ctx, result.ID)
+				}
+			}
 		} else {
 			result, err = tx.Tracks.Update(ctx, r)
 		}
@@ -325,19 +388,49 @@ func (a *App) SaveTrack(ctx context.Context, id *uuid.UUID, f CatalogForm) (doma
 	return result, err
 }
 
-func applyNamePoints(name *string, points *float64, f CatalogForm) {
+type catalogEdit struct {
+	name     *string
+	tags     *[]string
+	plays    **int64
+	excluded *bool
+	manual   *[]string
+}
+
+func (f CatalogForm) apply(edit catalogEdit) error {
 	if f.Name != nil {
-		*name = strings.TrimSpace(*f.Name)
+		*edit.name = strings.TrimSpace(*f.Name)
 	}
 
-	if f.Points != nil {
-		*points = *f.Points
+	if f.Tags != nil {
+		*edit.tags = *f.Tags
+	}
+
+	if f.ExcludedFromQuiz != nil {
+		*edit.excluded = *f.ExcludedFromQuiz
+	}
+
+	if f.YtPlays != nil {
+		if *f.YtPlays < 0 {
+			return fmt.Errorf("%w: метрики YouTube не могут быть отрицательными", domain.ErrInvalid)
+		}
+
+		*edit.plays = f.YtPlays
+
+		markManual(edit.manual, "yt_plays")
+	}
+
+	return validateCatalogName(*edit.name)
+}
+
+func markManual(fields *[]string, name string) {
+	if !slices.Contains(*fields, name) {
+		*fields = append(*fields, name)
 	}
 }
 
-func validateNamePoints(name string, points float64) error {
-	if name == "" || utf8.RuneCountInString(name) > 1000 || points < 0 || points > 100 {
-		return fmt.Errorf("%w: требуется название до 1000 символов и points от 0 до 100", domain.ErrInvalid)
+func validateCatalogName(name string) error {
+	if name == "" || utf8.RuneCountInString(name) > 1000 {
+		return fmt.Errorf("%w: требуется название до 1000 символов", domain.ErrInvalid)
 	}
 
 	return nil
@@ -378,12 +471,55 @@ func (a *App) PatchSettings(ctx context.Context, data []byte) (domain.Settings, 
 }
 
 // StartParsing создаёт асинхронный запуск; новые исполнители не запускают его автоматически.
-func (a *App) StartParsing(ctx context.Context) (domain.ParseRun, error) {
-	if a.token == "" {
-		return domain.ParseRun{}, fmt.Errorf("%w: задайте GENIUS_ACCESS_TOKEN", domain.ErrInvalid)
+func (a *App) StartParsing(ctx context.Context, refresh bool) (domain.ParseRun, error) {
+	if !refresh {
+		return a.uow.Runs.Create(ctx)
 	}
 
-	return a.uow.Runs.Create(ctx)
+	var run domain.ParseRun
+
+	err := a.uow.Transaction(ctx, func(tx *store.UnitOfWork) error {
+		var err error
+
+		run, err = tx.Runs.Create(ctx)
+		if err != nil {
+			return err
+		}
+
+		return tx.Artists.QueueCatalogRefresh(ctx)
+	})
+
+	return run, err
+}
+
+// ParseEvents возвращает журнал выбранного запуска.
+func (a *App) ParseEvents(ctx context.Context, id uuid.UUID, page domain.Page) ([]store.ParseEvent, error) {
+	return a.uow.Runs.Events(ctx, id, page)
+}
+
+// AlbumCleanupPreview перечисляет альбомы вне подтверждённой пятёрки.
+func (a *App) AlbumCleanupPreview(ctx context.Context, page domain.Page) ([]store.AlbumCleanupRow, error) {
+	return a.uow.Albums.CleanupPreview(ctx, page)
+}
+
+// CleanupAlbums атомарно удаляет выбранные альбомы, пригодные для очистки.
+func (a *App) CleanupAlbums(ctx context.Context, ids []uuid.UUID) error {
+	if len(ids) == 0 || len(ids) > 200 {
+		return fmt.Errorf("%w: выберите от 1 до 200 альбомов", domain.ErrInvalid)
+	}
+
+	seen := make(map[uuid.UUID]bool, len(ids))
+	for _, id := range ids {
+		if id == uuid.Nil || seen[id] {
+			return fmt.Errorf("%w: неверный список альбомов", domain.ErrInvalid)
+		}
+
+		seen[id] = true
+	}
+
+	return a.uow.Transaction(ctx, func(tx *store.UnitOfWork) error {
+		return tx.Albums.DeleteCleanupAlbums(ctx, ids)
+	})
 }
 
 // StopParsing запрашивает остановку после текущего исполнителя.

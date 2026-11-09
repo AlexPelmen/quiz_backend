@@ -2,13 +2,12 @@ package source
 
 import (
 	"context"
-	"encoding/csv"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
-	"strconv"
+	"slices"
 	"strings"
 	"time"
 	"unicode"
@@ -46,13 +45,15 @@ func NewGenius(s domain.Settings, token string) *Genius {
 		api: jsonClient{
 			client: client, base: s.GeniusURL, token: token,
 			userAgent: s.UserAgent, interval: time.Duration(s.GeniusRequestIntervalMS) * time.Millisecond,
-			retries: s.Source429Retries, retryDelay: time.Duration(s.Source429DelaySeconds) * time.Second,
+			retryStatus: http.StatusTooManyRequests, retries: min(3, s.Source429Retries),
+			retryDelay:    time.Duration(s.Source429DelaySeconds) * time.Second,
 			maxRetryDelay: time.Duration(s.Source429MaxDelaySeconds) * time.Second,
 		},
 		web: jsonClient{
 			client: client, base: s.GeniusWebURL,
 			userAgent: s.UserAgent, interval: time.Duration(s.GeniusRequestIntervalMS) * time.Millisecond,
-			retries: s.Source429Retries, retryDelay: time.Duration(s.Source429DelaySeconds) * time.Second,
+			retryStatus: http.StatusTooManyRequests, retries: min(3, s.Source429Retries),
+			retryDelay:    time.Duration(s.Source429DelaySeconds) * time.Second,
 			maxRetryDelay: time.Duration(s.Source429MaxDelaySeconds) * time.Second,
 		},
 	}
@@ -223,97 +224,164 @@ func compactArtistName(name string) string {
 	return strings.Join(strings.Fields(name), "")
 }
 
-// Catalog получает альбомы, полные треклисты и до TrackLimit популярных песен.
+// Catalog добирает треки и заполняет пропуски в метаданных.
 func (g *Genius) Catalog(ctx context.Context, lookup Lookup) (Catalog, error) {
 	var c Catalog
 
-	id, err := g.artistID(ctx, lookup)
-	if err != nil {
-		return c, err
-	}
+	var id int64
 
-	var artist struct {
-		Response struct {
-			Artist struct {
-				Name     string `json:"name"`
-				ImageURL string `json:"image_url"`
-			} `json:"artist"`
-		} `json:"response"`
-	}
-
-	if err := g.api.get(ctx, fmt.Sprintf("/artists/%d", id), &artist); err != nil {
-		return c, err
-	}
-
-	c.ArtistID, c.Name, c.LogoURL = id, artist.Response.Artist.Name, artist.Response.Artist.ImageURL
-
-	c.Albums, err = g.albums(ctx, id)
-	if err != nil {
-		var httpErr *HTTPError
-		if !errors.As(err, &httpErr) || httpErr.Status != http.StatusForbidden {
+	var err error
+	if lookup.NeedArtist || lookup.TrackLimit > 0 || needsGeniusAlbumList(lookup.Base.Albums) {
+		id, err = g.artistID(ctx, lookup)
+		if err != nil {
 			return c, err
 		}
 
-		c.Warnings = append(c.Warnings,
-			"веб-API Genius недоступен: альбомы извлечены из популярных треков, треклисты неполные")
+		c.ArtistID = id
 	}
 
-	for i := range c.Albums {
-		if err := g.albumDetails(ctx, &c.Albums[i]); err != nil {
-			if errors.Is(err, context.DeadlineExceeded) {
-				return c, err
-			}
-			c.Warnings = append(c.Warnings, fmt.Sprintf("альбом %d: %v", c.Albums[i].ID, err))
-		}
-	}
-
-	c.Tracks, err = g.songs(ctx, id, lookup.TrackLimit)
-	if err != nil {
-		return c, err
-	}
-
-	if len(c.Albums) == 0 {
-		seen := map[int64]bool{}
-		for _, song := range c.Tracks {
-			if song.Album != nil && song.Album.ID != 0 && song.Album.Name != "" && !seen[song.Album.ID] {
-				c.Albums = append(c.Albums, *song.Album)
-				seen[song.Album.ID] = true
-			}
-		}
-	}
-
-	return c, nil
-}
-
-func (g *Genius) albums(ctx context.Context, id int64) ([]Album, error) {
-	r := []Album{}
-
-	for page := 1; page > 0; {
-		var response struct {
+	if lookup.NeedArtist {
+		var artist struct {
 			Response struct {
-				Albums   []Album `json:"albums"`
-				NextPage *int    `json:"next_page"`
+				Artist struct {
+					Name     string `json:"name"`
+					ImageURL string `json:"image_url"`
+				} `json:"artist"`
 			} `json:"response"`
 		}
 
-		path := fmt.Sprintf("/artists/%d/albums?per_page=50&page=%d", id, page)
+		if err := g.api.get(ctx, fmt.Sprintf("/artists/%d", id), &artist); err != nil {
+			c.Warnings = append(c.Warnings, err.Error())
+		} else {
+			c.Name, c.LogoURL = artist.Response.Artist.Name, artist.Response.Artist.ImageURL
+		}
+	}
+
+	if lookup.TrackLimit > 0 {
+		c.Tracks, err = g.songs(ctx, id, lookup.TrackLimit, lookup.Base.Tracks)
+		if err != nil {
+			c.Warnings = append(c.Warnings, err.Error())
+		}
+	}
+
+	c.Albums, err = g.fillAlbums(ctx, id, lookup)
+
+	return c, err
+}
+
+func (g *Genius) fillAlbums(ctx context.Context, id int64, lookup Lookup) ([]Album, error) {
+	existing := lookup.Base.Albums
+	if !NeedsAlbums(existing) {
+		return nil, nil
+	}
+
+	var candidates []Album
+
+	if needsGeniusAlbumList(existing) {
+		var response struct {
+			Response struct {
+				Albums []Album `json:"albums"`
+			} `json:"response"`
+		}
+
+		path := fmt.Sprintf("/artists/%d/albums?per_page=20&page=1", id)
 		if err := g.web.get(ctx, path, &response); err != nil {
 			return nil, err
 		}
 
-		r = append(r, response.Response.Albums...)
-
-		if response.Response.NextPage == nil || *response.Response.NextPage <= page {
-			break
-		}
-
-		page = *response.Response.NextPage
+		candidates = response.Response.Albums
 	}
 
-	return r, nil
+	var updates []Album
+
+	slots := StudioAlbumLimit - len(existing)
+
+	for _, album := range candidates {
+		if album.ID == 0 || !IsStudioAlbum(album) {
+			continue
+		}
+
+		matches := slices.IndexFunc(existing, func(old Album) bool { return SameAlbum(old, album) })
+		if matches >= 0 {
+			old := existing[matches]
+			if !missingAlbumFields(old) || old.ID != 0 {
+				continue
+			}
+
+			album = fillGeniusAlbumSummary(old, album)
+		} else {
+			if !strings.EqualFold(album.Type, "Album") && !knownStudioAlbum(album, lookup.StudioGroups) {
+				continue
+			}
+
+			if slots <= 0 || slices.ContainsFunc(updates, func(old Album) bool { return SameAlbum(old, album) }) {
+				continue
+			}
+
+			slots--
+		}
+
+		updates = append(updates, album)
+	}
+
+	for _, album := range existing {
+		if album.ID != 0 && missingAlbumFields(album) {
+			updates = append(updates, album)
+		}
+	}
+
+	var issues error
+
+	for i := range updates {
+		if err := g.albumDetails(ctx, &updates[i]); err != nil {
+			issues = errors.Join(issues, err)
+		}
+	}
+
+	return updates, issues
+}
+
+func needsGeniusAlbumList(existing []Album) bool {
+	return len(existing) < StudioAlbumLimit || slices.ContainsFunc(existing, func(album Album) bool {
+		return album.ID == 0 && missingAlbumFields(album)
+	})
+}
+
+func knownStudioAlbum(album Album, groups []Album) bool {
+	matches := 0
+	studio := false
+
+	for _, group := range groups {
+		if SameAlbum(album, group) {
+			matches++
+			studio = IsStudioAlbum(group)
+		}
+	}
+
+	return matches == 1 && studio
+}
+
+func fillGeniusAlbumSummary(old, summary Album) Album {
+	if old.ID == 0 {
+		old.ID = summary.ID
+	}
+
+	if old.CoverURL == "" {
+		old.CoverURL = summary.CoverURL
+	}
+
+	if old.ReleaseDate == "" {
+		old.ReleaseDate = summary.ReleaseDate
+	}
+
+	return old
 }
 
 func (g *Genius) albumDetails(ctx context.Context, album *Album) error {
+	if !missingAlbumFields(*album) {
+		return nil
+	}
+
 	var response struct {
 		Response struct {
 			Album Album `json:"album"`
@@ -324,65 +392,13 @@ func (g *Genius) albumDetails(ctx context.Context, album *Album) error {
 		return err
 	}
 
-	album.ReleaseDate = response.Response.Album.ReleaseDate
-	if response.Response.Album.CoverURL != "" {
-		album.CoverURL = response.Response.Album.CoverURL
-	}
-
-	return g.trackList(ctx, album)
-}
-
-func (g *Genius) trackList(ctx context.Context, album *Album) error {
-	var text strings.Builder
-
-	w := csv.NewWriter(&text)
-	if err := w.Write([]string{"position", "title"}); err != nil {
-		return err
-	}
-
-	for page := 1; page > 0; {
-		var response struct {
-			Response struct {
-				Tracks []struct {
-					Number int  `json:"number"`
-					Song   Song `json:"song"`
-				} `json:"tracks"`
-				NextPage *int `json:"next_page"`
-			} `json:"response"`
-		}
-
-		path := fmt.Sprintf("/albums/%d/tracks?per_page=50&page=%d", album.ID, page)
-		if err := g.web.get(ctx, path, &response); err != nil {
-			return err
-		}
-
-		for _, t := range response.Response.Tracks {
-			if err := w.Write([]string{strconv.Itoa(t.Number), t.Song.Title}); err != nil {
-				return err
-			}
-		}
-
-		if response.Response.NextPage == nil || *response.Response.NextPage <= page {
-			break
-		}
-
-		page = *response.Response.NextPage
-	}
-
-	w.Flush()
-
-	if err := w.Error(); err != nil {
-		return err
-	}
-
-	album.TrackList, album.Complete = text.String(), true
-
+	*album = fillGeniusAlbumSummary(*album, response.Response.Album)
 	return nil
 }
 
-func (g *Genius) songs(ctx context.Context, id int64, limit int) ([]Song, error) {
+func (g *Genius) songs(ctx context.Context, id int64, limit int, existing []Song) ([]Song, error) {
 	r := []Song{}
-	for page := 1; len(r) < limit; {
+	for page := 1; len(r) < limit && page <= 2; {
 		var response struct {
 			Response struct {
 				Songs    []Song `json:"songs"`
@@ -396,17 +412,25 @@ func (g *Genius) songs(ctx context.Context, id int64, limit int) ([]Song, error)
 		}
 
 		for _, song := range response.Response.Songs {
-			var detail struct {
-				Response struct {
-					Song Song `json:"song"`
-				} `json:"response"`
+			if song.ID == 0 {
+				continue
 			}
 
-			if err := g.api.get(ctx, fmt.Sprintf("/songs/%d", song.ID), &detail); err != nil {
-				return nil, err
+			if song.Title == "" {
+				detail, err := g.song(ctx, song.ID)
+				if err != nil {
+					return r, err
+				}
+
+				song = detail
 			}
 
-			r = append(r, detail.Response.Song)
+			if song.Title == "" || slices.ContainsFunc(existing, func(old Song) bool { return sameSongTitle(old, song) }) ||
+				slices.ContainsFunc(r, func(old Song) bool { return sameSongTitle(old, song) }) {
+				continue
+			}
+
+			r = append(r, song)
 			if len(r) == limit {
 				break
 			}
