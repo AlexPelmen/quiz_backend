@@ -44,8 +44,13 @@ type RunRepository struct{ db DB }
 
 // Create создаёт запуск; уникальный индекс запрещает одновременные запуски.
 func (r RunRepository) Create(ctx context.Context) (domain.ParseRun, error) {
-	return one[domain.ParseRun](ctx, r.db, "INSERT INTO parse_runs(id) VALUES($1) RETURNING *",
-		[]any{uuid.New()})
+	return r.CreateProvider(ctx, "")
+}
+
+// CreateProvider сохраняет выбранный источник запуска.
+func (r RunRepository) CreateProvider(ctx context.Context, provider string) (domain.ParseRun, error) {
+	return one[domain.ParseRun](ctx, r.db, "INSERT INTO parse_runs(id,provider) VALUES($1,$2) RETURNING *",
+		[]any{uuid.New(), provider})
 }
 
 // Get возвращает состояние запуска.
@@ -84,8 +89,8 @@ func (r RunRepository) Stop(ctx context.Context, id uuid.UUID) (domain.ParseRun,
 // Finish завершает запуск и освобождает его захват.
 func (r RunRepository) Finish(ctx context.Context, run domain.ParseRun) error {
 	return execute(ctx, r.db, `UPDATE parse_runs SET status=CASE WHEN status='stopping' THEN 'stopped' ELSE $2 END,processed=$3,failed=$4,
-		error=$5,lease_until=NULL,updated_at=now() WHERE id=$1`,
-		[]any{run.ID, run.Status, run.Processed, run.Failed, run.Error})
+		error=$5,lease_until=NULL,updated_at=now(),fields=$6,albums=$7,tracks=$8,errors=$9 WHERE id=$1`,
+		[]any{run.ID, run.Status, run.Processed, run.Failed, run.Error, run.Fields, run.Albums, run.Tracks, run.Errors})
 }
 
 // DownloadRepository управляет очередью скачивания.

@@ -156,6 +156,10 @@ func (a *App) parseNext(ctx context.Context, s domain.Settings) error {
 		return err
 	}
 
+	if run.Provider != "" {
+		return a.runProvider(ctx, run, s)
+	}
+
 	deps := parseDependencies{
 		Settings: s, YouTubeMusic: source.YTMusicCatalog, ResolveTracks: source.YTMusicTracks,
 		AlbumPlays: source.YTMusicAlbumPlays,
@@ -460,6 +464,9 @@ func persistCatalog(ctx context.Context, tx *store.UnitOfWork, artist domain.Art
 		}
 	}
 
+	if len(shortlist) != domain.AlbumImportLimit(artist.YtSubs) {
+		shortlist = nil
+	}
 	if err := tx.Albums.SaveShortlist(ctx, artist.ID, shortlist); err != nil {
 		return err
 	}

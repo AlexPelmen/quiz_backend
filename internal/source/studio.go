@@ -48,8 +48,8 @@ func SameAlbum(a, b Album) bool {
 }
 
 // NeedsAlbums сообщает, нужны ли дополнительные альбомы, даты или ссылки на обложки.
-func NeedsAlbums(albums []Album) bool {
-	return len(albums) < StudioAlbumLimit || slices.ContainsFunc(albums, missingAlbumFields)
+func NeedsAlbums(albums []Album, limit int) bool {
+	return len(albums) < limit || slices.ContainsFunc(albums, missingAlbumFields)
 }
 
 func missingAlbumFields(a Album) bool {

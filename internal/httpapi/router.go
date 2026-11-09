@@ -391,7 +391,8 @@ func (a *api) remove(resource string) gin.HandlerFunc {
 
 func (a *api) startParsing(c *gin.Context) {
 	var form struct {
-		Refresh bool `json:"refresh"`
+		Refresh  bool   `json:"refresh"`
+		Provider string `json:"provider"`
 	}
 
 	if c.Request.ContentLength != 0 {
@@ -401,6 +402,19 @@ func (a *api) startParsing(c *gin.Context) {
 		}
 	}
 
+	if form.Provider != "" {
+		if form.Refresh {
+			a.respond(c, nil, domain.ErrInvalid)
+			return
+		}
+		value, err := a.app.StartProviderParsing(c.Request.Context(), form.Provider)
+		if err != nil {
+			a.respond(c, nil, err)
+			return
+		}
+		c.JSON(http.StatusAccepted, value)
+		return
+	}
 	value, err := a.app.StartParsing(c.Request.Context(), form.Refresh)
 	if err != nil {
 		a.respond(c, nil, err)

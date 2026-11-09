@@ -49,6 +49,18 @@ type mbArtist struct {
 
 // Enrich выбирает только единственное точное совпадение имени; неоднозначность не маскируется.
 func (m *MusicBrainz) Enrich(ctx context.Context, name string) (Enrichment, error) {
+	id, err := m.FindArtist(ctx, name)
+	if err != nil {
+		return Enrichment{}, err
+	}
+	if id == "" {
+		return Enrichment{}, fmt.Errorf("MusicBrainz: имя %q не найдено однозначно", name)
+	}
+	return m.EnrichByID(ctx, id)
+}
+
+// FindArtist ищет ID одним запросом и возвращает пустой ID при отсутствии однозначного совпадения.
+func (m *MusicBrainz) FindArtist(ctx context.Context, name string) (string, error) {
 	var result struct {
 		Artists []mbArtist `json:"artists"`
 	}
@@ -57,7 +69,7 @@ func (m *MusicBrainz) Enrich(ctx context.Context, name string) (Enrichment, erro
 
 	path := "/artist?fmt=json&limit=100&query=" + url.QueryEscape(`artist:"`+replacer.Replace(name)+`"`)
 	if err := m.api.get(ctx, path, &result); err != nil {
-		return Enrichment{}, err
+		return "", err
 	}
 
 	matches := []mbArtist{}
@@ -69,10 +81,10 @@ func (m *MusicBrainz) Enrich(ctx context.Context, name string) (Enrichment, erro
 	}
 
 	if len(matches) != 1 {
-		return Enrichment{}, fmt.Errorf("MusicBrainz: имя %q не найдено однозначно", name)
+		return "", nil
 	}
 
-	return m.EnrichByID(ctx, matches[0].ID)
+	return matches[0].ID, nil
 }
 
 // EnrichByID использует ранее сопоставленного исполнителя.
@@ -193,32 +205,54 @@ func (m *MusicBrainz) Tracks(ctx context.Context, artistID string, tracks []Song
 		return tracks, issues
 	}
 
-	var data mbRecordings
-
-	params := url.Values{"artist": {artistID}, "limit": {"25"}, "fmt": {"json"}}
-	if err := m.api.get(ctx, "/recording?"+params.Encode(), &data); err != nil {
+	found, err := m.ListRecordings(ctx, artistID)
+	if err != nil {
 		return tracks, errors.Join(issues, err)
 	}
-
-	for _, row := range data.Recordings {
-		if row.ID == "" || row.Title == "" || row.Video {
-			continue
-		}
-
-		song := Song{Title: row.Title, MusicBrainzID: row.ID, Duration: recordingDuration(row.Length)}
-
+	for _, song := range found {
 		if slices.ContainsFunc(tracks, func(old Song) bool { return sameSongTitle(old, song) }) {
 			continue
 		}
-
 		tracks = append(tracks, song)
 		if len(tracks) >= limit {
 			break
 		}
 	}
-
 	return tracks, issues
 }
+
+// ListRecordings запрашивает первую страницу записей исполнителя.
+func (m *MusicBrainz) ListRecordings(ctx context.Context, artistID string) ([]Song, error) {
+	var data mbRecordings
+	params := url.Values{"artist": {artistID}, "limit": {"25"}, "fmt": {"json"}}
+	if err := m.api.get(ctx, "/recording?"+params.Encode(), &data); err != nil {
+		return nil, err
+	}
+
+	var songs []Song
+	for _, row := range data.Recordings {
+		if row.ID == "" || row.Title == "" || row.Video {
+			continue
+		}
+
+		songs = append(songs, Song{Title: row.Title, MusicBrainzID: row.ID, Duration: recordingDuration(row.Length)})
+	}
+	return songs, nil
+}
+
+// Recording дополняет запись результатом одного запроса.
+func (m *MusicBrainz) Recording(ctx context.Context, artistID string, song Song) (Song, error) {
+	err := m.fillDuration(ctx, artistID, &song)
+	return song, err
+}
+
+// AlbumCover ищет обложку по ID группы релизов.
+func (m *MusicBrainz) AlbumCover(ctx context.Context, id string) (string, error) {
+	return m.cover(ctx, id)
+}
+
+// UseParserRetries передаёт управление повторами парсеру.
+func (m *MusicBrainz) UseParserRetries() { m.api.retries = 0 }
 
 func (m *MusicBrainz) fillDuration(ctx context.Context, id string, song *Song) error {
 	if song.MusicBrainzID != "" {

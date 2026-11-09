@@ -473,7 +473,7 @@ func (a *App) PatchSettings(ctx context.Context, data []byte) (domain.Settings, 
 // StartParsing создаёт асинхронный запуск; новые исполнители не запускают его автоматически.
 func (a *App) StartParsing(ctx context.Context, refresh bool) (domain.ParseRun, error) {
 	if !refresh {
-		return a.uow.Runs.Create(ctx)
+		return a.StartProviderParsing(ctx, "yt_music")
 	}
 
 	var run domain.ParseRun
@@ -481,7 +481,7 @@ func (a *App) StartParsing(ctx context.Context, refresh bool) (domain.ParseRun, 
 	err := a.uow.Transaction(ctx, func(tx *store.UnitOfWork) error {
 		var err error
 
-		run, err = tx.Runs.Create(ctx)
+		run, err = tx.Runs.CreateProvider(ctx, "yt_music")
 		if err != nil {
 			return err
 		}
@@ -492,12 +492,26 @@ func (a *App) StartParsing(ctx context.Context, refresh bool) (domain.ParseRun, 
 	return run, err
 }
 
+// StartProviderParsing создаёт запуск одного поставщика данных.
+func (a *App) StartProviderParsing(ctx context.Context, provider string) (domain.ParseRun, error) {
+	switch provider {
+	case "yt_music", "musicbrainz":
+	case "genius":
+		if a.token == "" {
+			return domain.ParseRun{}, fmt.Errorf("%w: для Genius нужен GENIUS_ACCESS_TOKEN", domain.ErrInvalid)
+		}
+	default:
+		return domain.ParseRun{}, fmt.Errorf("%w: неизвестный провайдер парсинга", domain.ErrInvalid)
+	}
+	return a.uow.Runs.CreateProvider(ctx, provider)
+}
+
 // ParseEvents возвращает журнал выбранного запуска.
 func (a *App) ParseEvents(ctx context.Context, id uuid.UUID, page domain.Page) ([]store.ParseEvent, error) {
 	return a.uow.Runs.Events(ctx, id, page)
 }
 
-// AlbumCleanupPreview перечисляет альбомы вне подтверждённой пятёрки.
+// AlbumCleanupPreview перечисляет альбомы вне подтверждённой подборки.
 func (a *App) AlbumCleanupPreview(ctx context.Context, page domain.Page) ([]store.AlbumCleanupRow, error) {
 	return a.uow.Albums.CleanupPreview(ctx, page)
 }

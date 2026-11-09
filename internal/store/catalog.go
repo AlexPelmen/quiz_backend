@@ -79,7 +79,18 @@ func (r ArtistRepository) Update(ctx context.Context, a domain.Artist) (domain.A
 // Delete удаляет исполнителя и его каталог в транзакции вызывающего сервиса.
 func (r ArtistRepository) Delete(ctx context.Context, id uuid.UUID) error {
 	for _, sql := range []string{
-		"DELETE FROM tracks WHERE id IN (SELECT track_id FROM artist_to_track WHERE artist_id=$1)",
+		`SELECT t.id FROM tracks t JOIN artist_to_track owner ON owner.track_id=t.id
+            WHERE owner.artist_id=$1 ORDER BY t.id FOR UPDATE OF t`,
+		`DELETE FROM tracks t USING artist_to_track owner WHERE owner.track_id=t.id AND owner.artist_id=$1
+            AND NOT EXISTS (SELECT 1 FROM artist_to_track other WHERE other.track_id=t.id AND other.artist_id<>$1)`,
+		`WITH removed AS (
+            DELETE FROM artist_to_track WHERE artist_id=$1 RETURNING track_id,is_primary
+        ), replacement AS (
+            SELECT DISTINCT ON (other.track_id) other.track_id,other.artist_id
+            FROM artist_to_track other JOIN removed USING (track_id)
+            WHERE removed.is_primary AND other.artist_id<>$1 ORDER BY other.track_id,other.artist_id
+        ) UPDATE artist_to_track owner SET is_primary=true FROM replacement r
+          WHERE (owner.track_id,owner.artist_id)=(r.track_id,r.artist_id)`,
 		"DELETE FROM albums WHERE id IN (SELECT album_id FROM artist_to_album WHERE artist_id=$1)",
 	} {
 		if _, err := r.db.Exec(ctx, sql, id); err != nil {
@@ -93,7 +104,7 @@ func (r ArtistRepository) Delete(ctx context.Context, id uuid.UUID) error {
 // Retry возвращает исполнителя в очередь явного парсинга.
 func (r ArtistRepository) Retry(ctx context.Context, id uuid.UUID) error {
 	return execute(ctx, r.db, `UPDATE artists SET status='created',error='',updated_at=now()
-		WHERE id=$1 AND status IN ('errored','parsed','manual')`, []any{id})
+		WHERE id=$1 AND status IN ('error','errored','partial','parsed','manual')`, []any{id})
 }
 
 // Release возвращает незавершённую обработку исполнителя в очередь.
@@ -222,6 +233,15 @@ func (r AlbumRepository) SetCover(ctx context.Context, id, downloadID uuid.UUID)
 
 // Import находит альбом по ID источника или однозначному имени в каталоге исполнителя.
 func (r AlbumRepository) Import(ctx context.Context, a domain.Album) (domain.Album, error) {
+	return r.importAlbum(ctx, a, false)
+}
+
+// Fill дополняет пропуски без замены известных метаданных.
+func (r AlbumRepository) Fill(ctx context.Context, a domain.Album) (domain.Album, error) {
+	return r.importAlbum(ctx, a, true)
+}
+
+func (r AlbumRepository) importAlbum(ctx context.Context, a domain.Album, fill bool) (domain.Album, error) {
 	matches, err := query[domain.Album](ctx, r.db, `SELECT * FROM catalog_albums WHERE artist_id=$1 AND
         (yt_music_id=$2 OR genius_id=$3 OR ($4<>'' AND music_brainz_id=$4) OR (lower(trim(name))=lower(trim($5))
             AND (yt_music_id IS NULL OR $2::text IS NULL OR yt_music_id=$2)
@@ -243,6 +263,23 @@ func (r AlbumRepository) Import(ctx context.Context, a domain.Album) (domain.Alb
 
 	if id == uuid.Nil {
 		return r.Create(ctx, a)
+	}
+	if fill {
+		err := execute(ctx, r.db, `UPDATE albums SET
+            release_date=COALESCE(NULLIF(release_date,''),$2),
+            cover_download_id=CASE WHEN cover_download_id IS NULL OR EXISTS (
+                SELECT 1 FROM downloads WHERE id=cover_download_id AND status IN ('manual','errored'))
+                THEN COALESCE($3,cover_download_id) ELSE cover_download_id END,
+            source_yt_plays=CASE WHEN yt_plays IS NULL AND NOT EXISTS (
+                SELECT 1 FROM tracks WHERE album_id=albums.id AND yt_plays IS NOT NULL)
+                THEN COALESCE(source_yt_plays,$4) ELSE source_yt_plays END,
+            yt_music_id=COALESCE(yt_music_id,$5),genius_id=COALESCE(genius_id,$6),
+            music_brainz_id=COALESCE(NULLIF(music_brainz_id,''),$7),updated_at=now() WHERE id=$1`,
+			[]any{id, a.ReleaseDate, a.CoverDownloadID, a.SourceYtPlays, a.YTMusicID, a.GeniusID, a.MusicBrainzID})
+		if err != nil {
+			return a, err
+		}
+		return r.Get(ctx, id)
 	}
 
 	err = execute(ctx, r.db, `UPDATE albums SET
@@ -279,10 +316,13 @@ type TrackRepository struct{ db DB }
 const trackColumns = `id,name,artist_id,album_id,tags,yt_plays,asked,guessed,excluded_from_quiz,
     yt_music_id,music_brainz_id,genius_id,manual_fields,missing_fields,status,duration_seconds,created_at,updated_at`
 
+const primaryTrackArtist = `EXISTS (SELECT 1 FROM artist_to_track owner
+    WHERE owner.track_id=catalog_tracks.id AND owner.artist_id=catalog_tracks.artist_id AND owner.is_primary)`
+
 // List возвращает страницу треков со статусами каталога и аудио.
 func (r TrackRepository) List(ctx context.Context, p domain.Page) ([]domain.TrackWithStatus, error) {
 	return query[domain.TrackWithStatus](ctx, r.db, `SELECT * FROM catalog_tracks
-        WHERE ($3::uuid IS NULL OR artist_id=$3) AND ($4::uuid IS NULL OR album_id=$4)
+        WHERE (artist_id=$3 OR ($3::uuid IS NULL AND `+primaryTrackArtist+`)) AND ($4::uuid IS NULL OR album_id=$4)
         AND ($5='' OR status=$5) AND ($6='' OR audio_status=$6)
         ORDER BY `+catalogOrder(p, "created_at DESC,id DESC")+` LIMIT $1 OFFSET $2`,
 		[]any{p.Limit, p.Offset, p.ArtistID, p.AlbumID, p.Status, p.AudioStatus})
@@ -290,7 +330,7 @@ func (r TrackRepository) List(ctx context.Context, p domain.Page) ([]domain.Trac
 
 // GetWithStatus возвращает трек и состояние его аудиозаписей.
 func (r TrackRepository) GetWithStatus(ctx context.Context, id uuid.UUID) (domain.TrackWithStatus, error) {
-	return one[domain.TrackWithStatus](ctx, r.db, `SELECT * FROM catalog_tracks WHERE id=$1`, []any{id})
+	return one[domain.TrackWithStatus](ctx, r.db, `SELECT * FROM catalog_tracks WHERE id=$1 AND `+primaryTrackArtist, []any{id})
 }
 
 // Touch отмечает изменение аудиозаписи трека.
@@ -300,7 +340,7 @@ func (r TrackRepository) Touch(ctx context.Context, id uuid.UUID) error {
 
 // Get возвращает трек по ID.
 func (r TrackRepository) Get(ctx context.Context, id uuid.UUID) (domain.Track, error) {
-	return one[domain.Track](ctx, r.db, `SELECT `+trackColumns+` FROM catalog_tracks WHERE id=$1`, []any{id})
+	return one[domain.Track](ctx, r.db, `SELECT `+trackColumns+` FROM catalog_tracks WHERE id=$1 AND `+primaryTrackArtist, []any{id})
 }
 
 // Create сохраняет трек и проверяет принадлежность альбома исполнителю.
@@ -339,16 +379,28 @@ func (r TrackRepository) Update(ctx context.Context, t domain.Track) (domain.Tra
 
 // Import сопоставляет трек по ID источника, названию, альбому и длительности.
 func (r TrackRepository) Import(ctx context.Context, t domain.Track, fallbackPlays *int64) (domain.Track, error) {
-	matches, err := query[domain.Track](ctx, r.db, `SELECT `+trackColumns+` FROM catalog_tracks WHERE artist_id=$1 AND
+	saved, _, err := r.importTrack(ctx, t, fallbackPlays, false)
+	return saved, err
+}
+
+// Fill дополняет пустые поля трека и возвращает его сохранённое и предыдущее состояния.
+func (r TrackRepository) Fill(ctx context.Context, t domain.Track) (domain.Track, domain.Track, error) {
+	return r.importTrack(ctx, t, nil, true)
+}
+
+func (r TrackRepository) importTrack(ctx context.Context, t domain.Track, fallbackPlays *int64, fill bool) (domain.Track, domain.Track, error) {
+	var previous domain.Track
+	matches, err := query[domain.Track](ctx, r.db, `SELECT `+trackColumns+` FROM catalog_tracks WHERE `+primaryTrackArtist+` AND
         (yt_music_id=$2 OR genius_id=$3 OR ($4<>'' AND music_brainz_id=$4)
-        OR (lower(trim(name))=lower(trim($5)) AND ($6::uuid IS NULL OR album_id IS NULL OR album_id=$6)
+        OR (EXISTS (SELECT 1 FROM artist_to_track link WHERE link.track_id=catalog_tracks.id AND link.artist_id=$1)
+            AND lower(trim(name))=lower(trim($5)) AND ($6::uuid IS NULL OR album_id IS NULL OR album_id=$6)
             AND ($7::integer IS NULL OR duration_seconds IS NULL OR abs(duration_seconds::bigint-$7)<=1)
             AND (yt_music_id IS NULL OR $2::text IS NULL OR yt_music_id=$2)
             AND (genius_id IS NULL OR $3::bigint IS NULL OR genius_id=$3)
             AND (music_brainz_id='' OR $4='' OR music_brainz_id=$4)))`,
 		[]any{t.ArtistID, t.YTMusicID, t.GeniusID, t.MusicBrainzID, t.Name, t.AlbumID, t.DurationSeconds})
 	if err != nil {
-		return t, err
+		return t, previous, err
 	}
 
 	id, err := importMatch(matches, func(m domain.Track) (uuid.UUID, bool) {
@@ -356,7 +408,7 @@ func (r TrackRepository) Import(ctx context.Context, t domain.Track, fallbackPla
 			(m.MusicBrainzID != "" && m.MusicBrainzID == t.MusicBrainzID)
 	})
 	if err != nil {
-		return t, fmt.Errorf("трек %q: %w", t.Name, err)
+		return t, previous, fmt.Errorf("трек %q: %w", t.Name, err)
 	}
 
 	if id == uuid.Nil {
@@ -364,22 +416,47 @@ func (r TrackRepository) Import(ctx context.Context, t domain.Track, fallbackPla
 			t.YtPlays = fallbackPlays
 		}
 
-		return r.Create(ctx, t)
+		saved, err := r.Create(ctx, t)
+		return saved, previous, err
 	}
 
-	err = execute(ctx, r.db, `UPDATE tracks SET
+	for _, match := range matches {
+		if match.ID == id {
+			previous = match
+			break
+		}
+	}
+	if fill || previous.ArtistID != t.ArtistID {
+		err = execute(ctx, r.db, `UPDATE tracks SET album_id=COALESCE(album_id,$2),
+            yt_plays=COALESCE(yt_plays,$3),duration_seconds=COALESCE(duration_seconds,$4),
+            yt_music_id=COALESCE(yt_music_id,$5),genius_id=COALESCE(genius_id,$6),
+            music_brainz_id=COALESCE(NULLIF(music_brainz_id,''),$7),updated_at=now() WHERE id=$1`,
+			[]any{id, t.AlbumID, t.YtPlays, t.DurationSeconds, t.YTMusicID, t.GeniusID, t.MusicBrainzID})
+	} else {
+		err = execute(ctx, r.db, `UPDATE tracks SET
         album_id=CASE WHEN 'album_id'=ANY(manual_fields) THEN album_id ELSE COALESCE($2,album_id) END,
         yt_plays=CASE WHEN 'yt_plays'=ANY(manual_fields) THEN yt_plays ELSE COALESCE($3,yt_plays,$8) END,
         duration_seconds=CASE WHEN 'duration_seconds'=ANY(manual_fields) THEN duration_seconds
             ELSE COALESCE($4,duration_seconds) END,
         yt_music_id=COALESCE($5,yt_music_id),genius_id=COALESCE($6,genius_id),
         music_brainz_id=COALESCE(NULLIF($7,''),music_brainz_id),updated_at=now() WHERE id=$1`,
-		[]any{id, t.AlbumID, t.YtPlays, t.DurationSeconds, t.YTMusicID, t.GeniusID, t.MusicBrainzID, fallbackPlays})
+			[]any{id, t.AlbumID, t.YtPlays, t.DurationSeconds, t.YTMusicID, t.GeniusID, t.MusicBrainzID, fallbackPlays})
+	}
 	if err != nil {
-		return t, err
+		return t, previous, err
 	}
 
-	return r.Get(ctx, id)
+	if previous.ArtistID != t.ArtistID {
+		_, err := r.db.Exec(ctx, `INSERT INTO artist_to_track(track_id,artist_id,is_primary) VALUES ($1,$2,false)
+            ON CONFLICT (track_id,artist_id) DO NOTHING`, id, t.ArtistID)
+		if err != nil {
+			return t, previous, translate(err)
+		}
+	}
+
+	saved, err := one[domain.Track](ctx, r.db, `SELECT `+trackColumns+` FROM catalog_tracks WHERE id=$1 AND artist_id=$2`,
+		[]any{id, t.ArtistID})
+	return saved, previous, err
 }
 
 // Delete удаляет трек, если он не используется сохранённым пакетом.

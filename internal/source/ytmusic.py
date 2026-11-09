@@ -24,6 +24,33 @@ def normalized(text):
     return " ".join(unicodedata.normalize("NFKC", text).casefold().split())
 
 
+def without_latin_accents(text):
+    result = []
+    latin = False
+    for char in unicodedata.normalize("NFD", normalized(text)):
+        if unicodedata.category(char).startswith("M"):
+            if latin:
+                continue
+        else:
+            latin = unicodedata.name(char, "").startswith("LATIN ")
+        result.append(char)
+    return unicodedata.normalize("NFC", "".join(result))
+
+
+def artist_candidates(rows, name):
+    exact, aliases = [], []
+    query, alias = normalized(name), without_latin_accents(name)
+    for row in rows:
+        artist, artist_id = row.get("artist") or "", row.get("browseId")
+        if not artist_id:
+            continue
+        if normalized(artist) == query:
+            exact.append(artist_id)
+        elif without_latin_accents(artist) == alias:
+            aliases.append(artist_id)
+    return list(dict.fromkeys(exact or aliases))
+
+
 def count(value):
     if value is None:
         return None
@@ -34,6 +61,26 @@ def count(value):
     scale = {"": 1, "K": 1000, "M": 1000000, "B": 1000000000}
     number = int(Decimal(match[1]) * scale[(match[2] or "").upper()])
     return number if number <= 2**63 - 1 else None
+
+
+def monthly_listeners(artist):
+    monthly = count(artist.get("monthlyListeners"))
+    return monthly if monthly is not None else count(artist.get("monthlyListenerCount"))
+
+
+def artist_popularity(artist):
+    return tuple(-1 if metric is None else metric
+                 for metric in (count(artist.get("subscribers")), monthly_listeners(artist)))
+
+
+def candidate_artist(yt, artist_id):
+    try:
+        return yt.get_artist(artist_id)
+    except KeyError as exc:
+        message = str(exc)
+        if "Unable to find 'twoColumnBrowseResultsRenderer'" in message and "singleColumnBrowseResultsRenderer" in message:
+            return None
+        raise
 
 
 def thumbnail(row):
@@ -174,17 +221,27 @@ def load_album_plays(yt, lookup):
 def load_catalog(yt, lookup):
     name = lookup["name"]
     artist_id = lookup.get("artist_id")
+    artist = None
     if not artist_id:
-        matches = {item["browseId"] for item in retry(yt.search, name, filter="artists")
-                   if item.get("browseId") and normalized(item.get("artist") or "") == normalized(name)}
-        if len(matches) != 1:
-            raise ValueError("artist not found unambiguously")
-        artist_id = matches.pop()
-    artist = retry(yt.get_artist, artist_id)
+        matches = artist_candidates(retry(yt.search, name, filter="artists"), name)
+        if not matches:
+            raise ValueError("artist not found")
+        artist_id = matches[0]
+        if len(matches) > 1:
+            cards = []
+            for candidate in matches:
+                card = retry(candidate_artist, yt, candidate)
+                if card is not None:
+                    cards.append((candidate, card))
+            if not cards:
+                raise ValueError("artist candidate cards unavailable")
+            artist_id, artist = max(cards, key=lambda item: artist_popularity(item[1]))
+            if artist_popularity(artist) == (-1, -1):
+                raise ValueError("artist popularity unavailable")
+    if artist is None:
+        artist = retry(yt.get_artist, artist_id)
     subs = count(artist.get("subscribers"))
-    plays = count(artist.get("monthlyListeners"))
-    if plays is None:
-        plays = count(artist.get("monthlyListenerCount"))
+    plays = monthly_listeners(artist)
     catalog = {"yt_music_id": artist_id, "name": artist.get("name") or name, "logo_url": thumbnail(artist),
                "yt_subs": subs, "yt_plays": plays, "albums": [], "tracks": [], "warnings": []}
 
@@ -264,11 +321,101 @@ def music_client():
     return YTMusic(language="en", requests_session=PacedSession())
 
 
+def parse_songs(rows):
+    result = []
+    for row in rows:
+        video, title = row.get("videoId"), row.get("title")
+        if not video or not title:
+            continue
+        song = {"yt_music_id": video, "title": title, "duration_seconds": duration(row),
+                "yt_plays": plays_for(row)}
+        release = row.get("album")
+        if isinstance(release, dict) and release.get("name"):
+            song["album"] = {"yt_music_id": release.get("id"), "name": release["name"]}
+        elif isinstance(release, str) and release:
+            song["album"] = {"name": release}
+        result.append(song)
+    return result
+
+
+def parse_albums(rows):
+    return [{"yt_music_id": row["browseId"], "name": row["title"], "type": row.get("type") or "",
+             "cover_art_url": thumbnail(row), "release_date": str(row.get("year") or "")}
+            for row in rows[:20] if row.get("browseId") and row.get("title")]
+
+
+def parse_request(yt, lookup):
+    operation = lookup["operation"]
+    key = lookup.get("key")
+    name = lookup["name"]
+    if operation == "search_artist":
+        matches = artist_candidates(yt.search(name, filter="artists"), name)
+        return {"yt_music_id": matches[0]} if len(matches) == 1 else {"artist_candidates": matches}
+    if operation == "artist":
+        artist = candidate_artist(yt, key) if key else yt.get_artist(lookup["artist_id"])
+        if artist is None:
+            return {"artist_unavailable": True}
+        albums, songs = artist.get("albums") or {}, artist.get("songs") or {}
+        return {"name": artist.get("name") or name, "logo_url": thumbnail(artist),
+                "yt_subs": count(artist.get("subscribers")),
+                "yt_plays": monthly_listeners(artist),
+                "album_browse_id": albums.get("browseId") or "", "album_params": albums.get("params") or "",
+                "albums": parse_albums(albums.get("results") or []),
+                "tracks": parse_songs(songs.get("results") or []),
+                "top_songs_playlist": (songs.get("browseId") or "").removeprefix("VL")}
+    if operation == "albums":
+        browse_id, params = key.split("\n", 1)
+        return {"albums": parse_albums(yt.get_artist_albums(browse_id, params, limit=20, order="Popularity"))}
+    if operation == "playlist":
+        return {"tracks": parse_songs(yt.get_playlist(key, limit=100).get("tracks") or [])}
+    if operation == "album":
+        album = yt.get_album(key)
+        tracks = parse_songs(album.get("tracks") or [])
+        plays = max((row["yt_plays"] for row in tracks if row["yt_plays"] is not None), default=None)
+        return {"albums": [{"yt_music_id": key, "name": album.get("title") or "",
+                            "release_date": str(album.get("year") or ""), "cover_art_url": thumbnail(album),
+                            "yt_plays": plays}], "tracks": tracks}
+    if operation == "song":
+        row = yt.get_song(key).get("videoDetails") or {}
+        return {"tracks": [{"yt_music_id": key, "title": row.get("title") or "",
+                            "yt_plays": plays_for(row), "duration_seconds": duration(row)}]}
+    if operation == "search_song":
+        track = lookup["tracks"][0]
+        rows = yt.search(f'{name} {track["title"]}', filter="songs", limit=8)
+        matches = {}
+        for row in rows:
+            if not row.get("videoId") or normalized(row.get("title") or "") != normalized(track["title"]):
+                continue
+            if not any(normalized(a.get("name") or "") == normalized(name)
+                       or lookup.get("artist_id") and a.get("id") == lookup["artist_id"]
+                       for a in row.get("artists") or []):
+                continue
+            expected, actual = track.get("duration_seconds"), duration(row)
+            if expected and actual and abs(expected - actual) > 1:
+                continue
+            matches[row["videoId"]] = row
+        if len(matches) > 1 and album_name(track):
+            matches = {video: row for video, row in matches.items()
+                       if normalized(album_name(row)) == normalized(album_name(track))}
+        return {"tracks": parse_songs(list(matches.values()))} if len(matches) == 1 else {}
+    raise ValueError("unknown operation")
+
+
 if __name__ == "__main__":
     try:
         lookup = json.load(sys.stdin)
         yt = music_client()
-        if lookup.get("albums"):
+        if lookup.get("operation"):
+            try:
+                result = parse_request(yt, lookup)
+            except Exception as exc:
+                response = getattr(exc, "response", None)
+                status = getattr(response, "status_code", None)
+                if status is None:
+                    match = re.search(r"HTTP\s+(?:Error\s+)?([45][0-9]{2})\b", str(exc), re.IGNORECASE)
+                    status = int(match[1]) if match else 0
+                result = {"failure": {"kind": type(exc).__name__, "status": status}}
+        elif lookup.get("albums"):
             result = load_album_plays(yt, lookup)
         elif lookup.get("tracks"):
             result = resolve_songs(yt, lookup)

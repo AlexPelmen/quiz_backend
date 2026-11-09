@@ -27,20 +27,14 @@ func TestAlbumCleanupPreservesSelectedAlbumsAndTracks(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	var kept []uuid.UUID
-
-	for i := range 5 {
-		album, err := uow.Albums.Create(ctx, domain.Album{
-			ID: uuid.New(), ArtistID: artist, Name: fmt.Sprintf("Студийный %d", i),
-		})
-		if err != nil {
-			t.Fatal(err)
-		}
-
-		kept = append(kept, album.ID)
+	kept, err := uow.Albums.Create(ctx, domain.Album{
+		ID: uuid.New(), ArtistID: artist, Name: "Студийный альбом",
+	})
+	if err != nil {
+		t.Fatal(err)
 	}
 
-	if err := uow.Albums.SaveShortlist(ctx, artist, kept); err != nil {
+	if err := uow.Albums.SaveShortlist(ctx, artist, []uuid.UUID{kept.ID}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -55,7 +49,7 @@ func TestAlbumCleanupPreservesSelectedAlbumsAndTracks(t *testing.T) {
 		t.Fatalf("неверный список: %+v", preview)
 	}
 
-	call("POST", "/api/v1/album-cleanup", fmt.Sprintf(`{"ids":[%q,%q]}`, extra, kept[0]), 409)
+	call("POST", "/api/v1/album-cleanup", fmt.Sprintf(`{"ids":[%q,%q]}`, extra, kept.ID), 409)
 	decodeResult(t, call("GET", "/api/v1/album-cleanup", "", 200), &preview)
 
 	if len(preview) != 1 {
@@ -66,9 +60,9 @@ func TestAlbumCleanupPreservesSelectedAlbumsAndTracks(t *testing.T) {
 
 	var albums, tracks int
 
-	err := pool.QueryRow(ctx, `SELECT (SELECT count(*) FROM albums),
+	err = pool.QueryRow(ctx, `SELECT (SELECT count(*) FROM albums),
         (SELECT count(*) FROM tracks WHERE album_id IS NULL)`).Scan(&albums, &tracks)
-	if err != nil || albums != 5 || tracks != 1 {
+	if err != nil || albums != 1 || tracks != 1 {
 		t.Fatalf("после очистки: альбомов %d, треков без альбома %d, ошибка %v", albums, tracks, err)
 	}
 }

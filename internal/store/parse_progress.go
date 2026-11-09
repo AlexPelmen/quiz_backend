@@ -42,7 +42,7 @@ func (r ArtistRepository) QueueCatalogRefresh(ctx context.Context) error {
 
 // SaveShortlist заменяет список альбомов по итогам последней обработки.
 func (r AlbumRepository) SaveShortlist(ctx context.Context, artist uuid.UUID, albums []uuid.UUID) error {
-	if len(albums) != 5 {
+	if len(albums) == 0 {
 		_, err := r.db.Exec(ctx, "DELETE FROM artist_album_shortlists WHERE artist_id=$1", artist)
 		return translate(err)
 	}
@@ -51,7 +51,7 @@ func (r AlbumRepository) SaveShortlist(ctx context.Context, artist uuid.UUID, al
         ON CONFLICT(artist_id) DO UPDATE SET album_ids=EXCLUDED.album_ids`, []any{artist, albums})
 }
 
-// AlbumCleanupRow описывает альбом вне пятёрки и защиту сохранённого квиза.
+// AlbumCleanupRow описывает альбом вне подборки и защиту сохранённого квиза.
 type AlbumCleanupRow struct {
 	ID        uuid.UUID `json:"id"`
 	Album     string    `json:"album"`
@@ -67,13 +67,15 @@ const cleanupCandidates = `
     JOIN artist_to_album owner ON owner.artist_id=s.artist_id
     JOIN albums al ON al.id=owner.album_id
     WHERE NOT (al.id=ANY(s.album_ids))
-      AND 5=(SELECT count(*) FROM artist_to_album kept
+      AND cardinality(s.album_ids)=1+(SELECT count(*) FROM unnest($1::bigint[]) AS threshold
+                                      WHERE threshold<=a.yt_subs)
+      AND cardinality(s.album_ids)=(SELECT count(*) FROM artist_to_album kept
              WHERE kept.artist_id=s.artist_id AND kept.album_id=ANY(s.album_ids))`
 
-// CleanupPreview показывает альбомы, вышедшие за пределы последней подтверждённой пятёрки.
+// CleanupPreview показывает альбомы вне последней подтверждённой подборки.
 func (r AlbumRepository) CleanupPreview(ctx context.Context, page domain.Page) ([]AlbumCleanupRow, error) {
-	return query[AlbumCleanupRow](ctx, r.db, cleanupCandidates+` ORDER BY a.name,al.name,al.id LIMIT $1 OFFSET $2`,
-		[]any{page.Limit, page.Offset})
+	return query[AlbumCleanupRow](ctx, r.db, cleanupCandidates+` ORDER BY a.name,al.name,al.id LIMIT $2 OFFSET $3`,
+		[]any{domain.AlbumSubscriberThresholds(), page.Limit, page.Offset})
 }
 
 // DeleteCleanupAlbums удаляет только выбранные и всё ещё доступные для очистки записи.
@@ -83,8 +85,9 @@ func (r AlbumRepository) DeleteCleanupAlbums(ctx context.Context, ids []uuid.UUI
 	}
 
 	result, err := r.db.Exec(ctx, `DELETE FROM albums WHERE id IN (
-        SELECT id FROM (`+cleanupCandidates+`) candidates WHERE id=ANY($1::uuid[]) AND NOT protected
-    ) AND NOT EXISTS (SELECT 1 FROM parse_runs WHERE status IN ('pending','running','stopping'))`, ids)
+        SELECT id FROM (`+cleanupCandidates+`) candidates WHERE id=ANY($2::uuid[]) AND NOT protected
+    ) AND NOT EXISTS (SELECT 1 FROM parse_runs WHERE status IN ('pending','running','stopping'))`,
+		domain.AlbumSubscriberThresholds(), ids)
 	if err != nil {
 		return translate(err)
 	}

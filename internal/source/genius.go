@@ -106,60 +106,67 @@ func (g *Genius) artistID(ctx context.Context, lookup Lookup) (int64, error) {
 }
 
 func (g *Genius) searchArtists(ctx context.Context, search, name string) (map[int64]bool, error) {
-	// Полное совпадение надёжнее совпадения по части имени.
-	matches := [5]map[int64]bool{{}, {}, {}, {}, {}}
-
-	// Поиск Genius возвращает песни, поэтому исполнитель может появиться не сразу.
-	const searchPages = 5
-	const pageSize = 10
-	for page := 1; page <= searchPages; page++ {
-		var result struct {
-			Response struct {
-				Hits []struct {
-					Result struct {
-						PrimaryArtist struct {
-							ID   int64  `json:"id"`
-							Name string `json:"name"`
-						} `json:"primary_artist"`
-					} `json:"result"`
-				} `json:"hits"`
-			} `json:"response"`
-		}
-
-		path := fmt.Sprintf("/search?q=%s&per_page=%d&page=%d", url.QueryEscape(search), pageSize, page)
-		if err := g.api.get(ctx, path, &result); err != nil {
+	s := newGeniusArtistSearch(search, name)
+	for page := 1; page <= 5; page++ {
+		more, err := g.SearchArtistPage(ctx, s, page)
+		if err != nil {
 			return nil, err
 		}
-
-		for _, hit := range result.Response.Hits {
-			a := hit.Result.PrimaryArtist
-			normalizedName, normalizedQuery := normalizeArtistName(a.Name), normalizeArtistName(name)
-			switch {
-			case strings.EqualFold(strings.TrimSpace(a.Name), strings.TrimSpace(name)):
-				matches[0][a.ID] = true
-			case normalizedName == normalizedQuery:
-				matches[1][a.ID] = true
-			case normalizedQuery != "" && compactArtistName(normalizedName) == compactArtistName(normalizedQuery):
-				matches[2][a.ID] = true
-			case domain.TransliterateRussian(normalizedName) == domain.TransliterateRussian(normalizedQuery):
-				matches[3][a.ID] = true
-			case artistNameMatches(a.Name, name):
-				matches[4][a.ID] = true
-			}
-		}
-
-		if len(result.Response.Hits) < pageSize {
+		if !more {
 			break
 		}
 	}
-
-	for _, ids := range matches {
+	for _, ids := range s.matches {
 		if len(ids) > 0 {
 			return ids, nil
 		}
 	}
-
 	return nil, nil
+}
+
+// SearchArtistPage добавляет совпадения из одного запроса к поиску Genius.
+func (g *Genius) SearchArtistPage(ctx context.Context, s *GeniusArtistSearch, page int) (bool, error) {
+	const pageSize = 10
+	var result struct {
+		Response struct {
+			Hits []struct {
+				Result struct {
+					PrimaryArtist struct {
+						ID   int64  `json:"id"`
+						Name string `json:"name"`
+					} `json:"primary_artist"`
+				} `json:"result"`
+			} `json:"hits"`
+		} `json:"response"`
+	}
+
+	path := fmt.Sprintf("/search?q=%s&per_page=%d&page=%d", url.QueryEscape(s.query), pageSize, page)
+	if err := g.api.get(ctx, path, &result); err != nil {
+		return false, err
+	}
+
+	name, matches := s.name, s.matches
+	for _, hit := range result.Response.Hits {
+		a := hit.Result.PrimaryArtist
+		if a.ID == 0 {
+			continue
+		}
+		normalizedName, normalizedQuery := normalizeArtistName(a.Name), normalizeArtistName(name)
+		switch {
+		case strings.EqualFold(strings.TrimSpace(a.Name), strings.TrimSpace(name)):
+			matches[0][a.ID] = true
+		case normalizedName == normalizedQuery:
+			matches[1][a.ID] = true
+		case normalizedQuery != "" && compactArtistName(normalizedName) == compactArtistName(normalizedQuery):
+			matches[2][a.ID] = true
+		case domain.TransliterateRussian(normalizedName) == domain.TransliterateRussian(normalizedQuery):
+			matches[3][a.ID] = true
+		case artistNameMatches(a.Name, name):
+			matches[4][a.ID] = true
+		}
+	}
+
+	return len(result.Response.Hits) == pageSize, nil
 }
 
 func artistNameMatches(name, query string) bool {
@@ -227,11 +234,14 @@ func compactArtistName(name string) string {
 // Catalog добирает треки и заполняет пропуски в метаданных.
 func (g *Genius) Catalog(ctx context.Context, lookup Lookup) (Catalog, error) {
 	var c Catalog
+	if lookup.AlbumLimit == 0 {
+		lookup.AlbumLimit = StudioAlbumLimit
+	}
 
 	var id int64
 
 	var err error
-	if lookup.NeedArtist || lookup.TrackLimit > 0 || needsGeniusAlbumList(lookup.Base.Albums) {
+	if lookup.NeedArtist || lookup.TrackLimit > 0 || needsGeniusAlbumList(lookup.Base.Albums, lookup.AlbumLimit) {
 		id, err = g.artistID(ctx, lookup)
 		if err != nil {
 			return c, err
@@ -271,13 +281,13 @@ func (g *Genius) Catalog(ctx context.Context, lookup Lookup) (Catalog, error) {
 
 func (g *Genius) fillAlbums(ctx context.Context, id int64, lookup Lookup) ([]Album, error) {
 	existing := lookup.Base.Albums
-	if !NeedsAlbums(existing) {
+	if !NeedsAlbums(existing, lookup.AlbumLimit) {
 		return nil, nil
 	}
 
 	var candidates []Album
 
-	if needsGeniusAlbumList(existing) {
+	if needsGeniusAlbumList(existing, lookup.AlbumLimit) {
 		var response struct {
 			Response struct {
 				Albums []Album `json:"albums"`
@@ -294,7 +304,7 @@ func (g *Genius) fillAlbums(ctx context.Context, id int64, lookup Lookup) ([]Alb
 
 	var updates []Album
 
-	slots := StudioAlbumLimit - len(existing)
+	slots := lookup.AlbumLimit - len(existing)
 
 	for _, album := range candidates {
 		if album.ID == 0 || !IsStudioAlbum(album) {
@@ -341,8 +351,8 @@ func (g *Genius) fillAlbums(ctx context.Context, id int64, lookup Lookup) ([]Alb
 	return updates, issues
 }
 
-func needsGeniusAlbumList(existing []Album) bool {
-	return len(existing) < StudioAlbumLimit || slices.ContainsFunc(existing, func(album Album) bool {
+func needsGeniusAlbumList(existing []Album, limit int) bool {
+	return len(existing) < limit || slices.ContainsFunc(existing, func(album Album) bool {
 		return album.ID == 0 && missingAlbumFields(album)
 	})
 }

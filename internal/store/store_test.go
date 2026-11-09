@@ -88,6 +88,61 @@ func TestTracksListNewestFirstAcrossPages(t *testing.T) {
 	}
 }
 
+func TestTrackImportReusesRecordingAcrossArtists(t *testing.T) {
+	_, uow := testutil.Database(t)
+	ctx := t.Context()
+	artists := []uuid.UUID{uuid.New(), uuid.New()}
+	for _, id := range artists {
+		if _, err := uow.Artists.Create(ctx, domain.Artist{ID: id, Name: id.String()}); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	videoID := "MyS3DIFaXF4"
+	recording := uuid.New()
+	for i, artistID := range []uuid.UUID{artists[0], artists[1], artists[1]} {
+		id := recording
+		if i > 0 {
+			id = uuid.New()
+		}
+		if err := uow.Transaction(ctx, func(tx *store.UnitOfWork) error {
+			saved, previous, err := tx.Tracks.Fill(ctx, domain.Track{
+				ID: id, ArtistID: artistID, Name: "RATATATA", YTMusicID: &videoID,
+			})
+			if err != nil {
+				return err
+			}
+			if saved.ID != recording || saved.ArtistID != artistID || (previous.ID == uuid.Nil) != (i == 0) {
+				return fmt.Errorf("неверный результат импорта: %+v, предыдущий ID %s", saved, previous.ID)
+			}
+			return nil
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	for _, artistID := range artists {
+		tracks, err := uow.Tracks.List(ctx, domain.Page{ArtistID: &artistID, Limit: 10})
+		if err != nil || len(tracks) != 1 || tracks[0].ID != recording || tracks[0].ArtistID != artistID {
+			t.Fatalf("каталог исполнителя %s: %+v, %v", artistID, tracks, err)
+		}
+	}
+
+	tracks, err := uow.Tracks.List(ctx, domain.Page{Limit: 10})
+	if err != nil || len(tracks) != 1 || tracks[0].ArtistID != artists[0] {
+		t.Fatalf("общий каталог: %+v, %v", tracks, err)
+	}
+	if err := uow.Transaction(ctx, func(tx *store.UnitOfWork) error {
+		return tx.Artists.Delete(ctx, artists[0])
+	}); err != nil {
+		t.Fatal(err)
+	}
+	saved, err := uow.Tracks.Get(ctx, recording)
+	if err != nil || saved.ArtistID != artists[1] {
+		t.Fatalf("совместная запись после удаления основного исполнителя: %+v, %v", saved, err)
+	}
+}
+
 func TestDownloadsListNewestFirstAcrossPages(t *testing.T) {
 	pool, uow := testutil.Database(t)
 	ctx := t.Context()

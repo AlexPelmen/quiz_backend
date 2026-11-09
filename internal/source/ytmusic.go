@@ -17,6 +17,8 @@ import (
 var ytMusicScript string
 
 type ytMusicLookup struct {
+	Operation        string  `json:"operation,omitempty"`
+	Key              string  `json:"key,omitempty"`
 	Name             string  `json:"name"`
 	ArtistID         *string `json:"artist_id"`
 	Subs             *int64  `json:"yt_subs"`
@@ -26,6 +28,13 @@ type ytMusicLookup struct {
 	Albums           []Album `json:"albums,omitempty"`
 	TopSongs         []Song  `json:"top_songs,omitempty"`
 	TopSongsPlaylist string  `json:"top_songs_playlist,omitempty"`
+}
+
+// YTMusicRequest выполняет одну операцию YouTube Music без внутренних повторов.
+func YTMusicRequest(ctx context.Context, s domain.Settings, operation, key string, artist domain.Artist, tracks []Song) (Catalog, error) {
+	return runYTMusic(ctx, s, ytMusicLookup{
+		Operation: operation, Key: key, Name: artist.Name, ArtistID: artist.YTMusicID, Tracks: tracks,
+	})
 }
 
 // YTMusicCatalog получает метаданные через ytmusicapi без скачивания файлов.
@@ -73,6 +82,9 @@ func runYTMusic(ctx context.Context, s domain.Settings, lookup ytMusicLookup) (C
 	var catalog Catalog
 	if err := json.Unmarshal(output, &catalog); err != nil {
 		return catalog, fmt.Errorf("ответ YouTube Music: %w", err)
+	}
+	if catalog.Failure != nil {
+		return Catalog{}, catalog.Failure
 	}
 
 	return catalog, nil

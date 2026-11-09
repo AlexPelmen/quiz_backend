@@ -19,7 +19,7 @@ func (r PackRepository) Pick(ctx context.Context, excluded []uuid.UUID, filter P
 	var c domain.Candidate
 
 	sql, args := rankCandidates(`SELECT a.* FROM catalog_artists a
-        WHERE NOT a.excluded_from_quiz AND a.status IN ('parsed','manual') AND NOT(a.id=ANY($1::uuid[]))
+        WHERE NOT a.excluded_from_quiz AND a.status IN ('parsed','manual','partial','error') AND NOT(a.id=ANY($1::uuid[]))
         AND ($2='' OR $2=ANY(a.tags)) AND CASE $3
         WHEN 'artist_by_cover' THEN EXISTS(SELECT 1 FROM catalog_albums al `+approvedCover+`
             WHERE al.artist_id=a.id AND NOT al.excluded_from_quiz)
@@ -65,7 +65,7 @@ func (r PackRepository) AudioArtists(
 	ctx context.Context, excluded []uuid.UUID, filter PickFilter,
 ) ([]domain.Artist, error) {
 	sql, args := rankCandidates(`SELECT a.* FROM catalog_artists a
-        WHERE NOT a.excluded_from_quiz AND a.status IN ('parsed','manual') AND NOT(a.id=ANY($1::uuid[]))
+        WHERE NOT a.excluded_from_quiz AND a.status IN ('parsed','manual','partial','error') AND NOT(a.id=ANY($1::uuid[]))
         AND ($2='' OR $2=ANY(a.tags)) AND EXISTS(SELECT 1 FROM tracks t
             JOIN artist_to_track owner ON owner.track_id=t.id
             WHERE owner.artist_id=a.id AND NOT t.excluded_from_quiz AND EXISTS(`+finishedAudio+`))`,

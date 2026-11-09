@@ -7,11 +7,12 @@ type CatalogSource interface {
 	Catalog(context.Context, Lookup) (Catalog, error)
 }
 
-// Lookup задаёт исполнителя и лимит отдельных треков.
+// Lookup задаёт исполнителя и лимиты импорта.
 type Lookup struct {
 	Name         string
 	GeniusID     *int64
 	TrackLimit   int
+	AlbumLimit   int
 	Base         Catalog
 	NeedArtist   bool
 	StudioGroups []Album
@@ -19,19 +20,38 @@ type Lookup struct {
 
 // Catalog содержит подготовленные сведения источника.
 type Catalog struct {
-	AlbumsRanked     bool     `json:"albums_ranked"`
-	RankedAlbumIDs   []string `json:"-"`
-	TopSongs         []Song   `json:"top_songs"`
-	TopSongsPlaylist string   `json:"top_songs_playlist"`
-	ArtistID         int64    `json:"genius_id"`
-	YTMusicID        *string  `json:"yt_music_id"`
-	YtPlays          *int64   `json:"yt_plays"`
-	YtSubs           *int64   `json:"yt_subs"`
-	Name             string   `json:"name"`
-	LogoURL          string   `json:"logo_url"`
-	Albums           []Album  `json:"albums"`
-	Tracks           []Song   `json:"tracks"`
-	Warnings         []string `json:"warnings"`
+	ArtistCandidates  []string        `json:"artist_candidates,omitempty"`
+	ArtistUnavailable bool            `json:"artist_unavailable,omitempty"`
+	Failure           *RequestFailure `json:"failure,omitempty"`
+	AlbumBrowseID     string          `json:"album_browse_id,omitempty"`
+	AlbumParams       string          `json:"album_params,omitempty"`
+	AlbumsRanked      bool            `json:"albums_ranked"`
+	RankedAlbumIDs    []string        `json:"-"`
+	TopSongs          []Song          `json:"top_songs"`
+	TopSongsPlaylist  string          `json:"top_songs_playlist"`
+	ArtistID          int64           `json:"genius_id"`
+	YTMusicID         *string         `json:"yt_music_id"`
+	YtPlays           *int64          `json:"yt_plays"`
+	YtSubs            *int64          `json:"yt_subs"`
+	Name              string          `json:"name"`
+	LogoURL           string          `json:"logo_url"`
+	Albums            []Album         `json:"albums"`
+	Tracks            []Song          `json:"tracks"`
+	Warnings          []string        `json:"warnings"`
+}
+
+// RequestFailure содержит классификацию ошибки отдельного запроса YouTube Music.
+type RequestFailure struct {
+	Kind   string `json:"kind"`
+	Status int    `json:"status"`
+}
+
+// Error описывает ошибку без данных карточки и URL.
+func (e *RequestFailure) Error() string {
+	if e.Status != 0 {
+		return (&HTTPError{Base: "YouTube Music", Status: e.Status}).Error()
+	}
+	return "YouTube Music: " + e.Kind
 }
 
 // Album содержит метаданные релиза и необязательный сохранённый треклист.

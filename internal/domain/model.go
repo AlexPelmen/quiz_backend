@@ -126,6 +126,11 @@ type Download struct {
 
 // ParseRun позволяет отслеживать явно запущенный импорт.
 type ParseRun struct {
+	Provider   string     `json:"provider"`
+	Fields     int        `json:"fields"`
+	Albums     int        `json:"albums"`
+	Tracks     int        `json:"tracks"`
+	Errors     int        `json:"errors"`
 	ID         uuid.UUID  `json:"id"`
 	Status     string     `json:"status"`
 	Processed  int        `json:"processed"`

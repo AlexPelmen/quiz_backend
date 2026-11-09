@@ -31,6 +31,7 @@ type Settings struct {
 	Source429Retries            int      `json:"source_429_retries"`
 	Source429DelaySeconds       int      `json:"source_429_delay_seconds"`
 	Source429MaxDelaySeconds    int      `json:"source_429_max_delay_seconds"`
+	ParserStopFailures          int      `json:"parser_stop_failures"`
 }
 
 // DefaultSettings задаёт рабочие значения для нового экземпляра.
@@ -44,7 +45,7 @@ func DefaultSettings() Settings {
 		GeniusURL: "https://api.genius.com", GeniusWebURL: "https://genius.com/api",
 		MusicBrainzURL: "https://musicbrainz.org/ws/2", UserAgent: "MusicQuiz/1.0 (local music quiz service)",
 		GeniusRequestIntervalMS: 1000, Source429Retries: 3,
-		Source429DelaySeconds: 1, Source429MaxDelaySeconds: 3,
+		Source429DelaySeconds: 1, Source429MaxDelaySeconds: 3, ParserStopFailures: 10,
 		RoundTypes: []string{
 			"artist_by_track", "artist_by_cover", "track_vowels", "artist_by_logo", "artist_initial",
 			"artist_by_track", "artist_by_cover", "track_vowels", "artist_by_logo", "artist_initial",
@@ -54,7 +55,8 @@ func DefaultSettings() Settings {
 
 // Validate проверяет конфигурацию до её записи и использования.
 func (s Settings) Validate() error {
-	if s.GeniusRequestIntervalMS < 100 || s.GeniusRequestIntervalMS > 60000 ||
+	if s.ParserStopFailures < 2 || s.ParserStopFailures > 1000 ||
+		s.GeniusRequestIntervalMS < 100 || s.GeniusRequestIntervalMS > 60000 ||
 		s.Source429Retries < 0 || s.Source429Retries > 10 || s.Source429DelaySeconds < 1 ||
 		s.Source429MaxDelaySeconds < s.Source429DelaySeconds || s.Source429MaxDelaySeconds > 3600 {
 		return fmt.Errorf("%w: недопустимые настройки ожидания источника", ErrInvalid)

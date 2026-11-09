@@ -67,9 +67,9 @@ func TestStudioAlbumSelectionKeepsRankAndRejectsOtherEditions(t *testing.T) {
 		{Name: "Six"},
 	}
 
-	albums := pickStudioAlbums(candidates, []source.Album{{Name: "Concert", Type: "Live"}})
-	if len(albums) != 5 || albums[0].Name != "One" || albums[4].Name != "Five" {
-		t.Fatalf("неверная пятёрка: %+v", albums)
+	albums := pickStudioAlbums(candidates, []source.Album{{Name: "Concert", Type: "Live"}}, 3)
+	if len(albums) != 3 || albums[0].Name != "One" || albums[2].Name != "Three" {
+		t.Fatalf("неверная подборка: %+v", albums)
 	}
 }
 
@@ -101,7 +101,8 @@ func TestAlbumPlaysOnlyRequestsSelectedGaps(t *testing.T) {
 			return source.Catalog{Albums: []source.Album{{YTMusicID: &first, YtPlays: &foundPlays}}}, nil
 		},
 	}
-	app, artist := &App{}, domain.Artist{Name: "Artist"}
+	subs := int64(5_000_000)
+	app, artist := &App{}, domain.Artist{Name: "Artist", YtSubs: &subs}
 
 	got := app.collectCatalog(t.Context(), &artist, deps, saved)
 	if len(got.Albums) != 5 || got.Albums[0].YtPlays != &foundPlays || got.Albums[1].YtPlays != &savedPlays ||

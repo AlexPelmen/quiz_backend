@@ -538,6 +538,8 @@
               "type": "string",
               "enum": [
                 "parsed",
+                "partial",
+                "error",
                 "manual"
               ]
             }
@@ -915,6 +917,7 @@
     "/api/v1/tracks": {
       "get": {
         "summary": "Список треков от новых к старым",
+        "description": "Совместный трек появляется один раз в общем списке и доступен при фильтрации по любому связанному исполнителю. В отфильтрованном списке artist_id соответствует фильтру.",
         "parameters": [
           {
             "name": "limit",
@@ -959,6 +962,8 @@
               "type": "string",
               "enum": [
                 "parsed",
+                "partial",
+                "error",
                 "manual"
               ]
             }
@@ -1688,7 +1693,11 @@
                 "properties": {
                   "refresh": {
                     "type": "boolean",
-                    "description": "Поставить ранее обработанных исполнителей в очередь повторно."
+                    "description": "Совместимый запуск YouTube Music с постановкой ранее обработанных исполнителей в очередь. Используется без provider."
+                  },
+                  "provider": {
+                    "enum": ["yt_music", "genius", "musicbrainz"],
+                    "description": "Единственный источник запуска. По умолчанию YouTube Music."
                   }
                 }
               }
@@ -3706,7 +3715,7 @@
     },
     "/api/v1/album-cleanup": {
       "get": {
-        "summary": "Предпросмотр альбомов вне актуальной пятёрки YouTube Music",
+        "summary": "Предпросмотр альбомов вне актуальной подборки YouTube Music",
         "parameters": [
           {
             "name": "limit",
@@ -3832,6 +3841,8 @@
               "created",
               "processing",
               "parsed",
+              "partial",
+              "error",
               "errored",
               "manual"
             ]
@@ -4032,6 +4043,8 @@
             "type": "string",
             "enum": [
               "parsed",
+              "partial",
+              "error",
               "manual"
             ]
           },
@@ -4088,6 +4101,8 @@
             "type": "string",
             "enum": [
               "parsed",
+              "partial",
+              "error",
               "manual"
             ]
           },
@@ -4234,6 +4249,13 @@
       "ParseRun": {
         "type": "object",
         "properties": {
+          "provider": {
+            "enum": ["", "yt_music", "genius", "musicbrainz"]
+          },
+          "fields": {"type": "integer", "minimum": 0},
+          "albums": {"type": "integer", "minimum": 0},
+          "tracks": {"type": "integer", "minimum": 0},
+          "errors": {"type": "integer", "minimum": 0},
           "id": {
             "type": "string",
             "format": "uuid"
@@ -4734,14 +4756,14 @@
             "maximum": 3600,
             "type": "integer",
             "default": 1,
-            "description": "Начальная пауза для повторов Genius при HTTP 429 и MusicBrainz при HTTP 503."
+            "description": "Базовая пауза перед повтором запроса. Умножается на номер повтора."
           },
           "source_429_max_delay_seconds": {
             "minimum": 1,
             "maximum": 3600,
             "type": "integer",
             "default": 3,
-            "description": "Максимальная пауза между повторами Genius и MusicBrainz."
+            "description": "Верхняя граница паузы между повторами."
           },
           "genius_request_interval_ms": {
             "minimum": 100,
@@ -4749,12 +4771,19 @@
             "type": "integer",
             "default": 1000
           },
+          "parser_stop_failures": {
+            "type": "integer",
+            "minimum": 2,
+            "maximum": 1000,
+            "default": 10,
+            "description": "Порог одинаковых ошибок подряд после повторов, затронувших разные сущности."
+          },
           "source_429_retries": {
             "minimum": 0,
             "maximum": 10,
             "type": "integer",
             "default": 3,
-            "description": "Число повторов Genius и MusicBrainz. Адаптеры выполняют максимум три повтора."
+            "description": "Максимальное число повторов одного запроса в прогоне провайдера после первой попытки."
           },
           "quiz_guess_rate_enabled": {
             "type": "boolean",

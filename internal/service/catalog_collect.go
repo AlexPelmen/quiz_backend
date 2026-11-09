@@ -19,6 +19,7 @@ func (a *App) collectCatalog(
 	catalog := readYouTubeMusic(ctx, *artist, deps, saved.Tracks)
 
 	limit := importTrackLimit(*artist, catalog.YtSubs)
+	albumLimit := domain.AlbumImportLimit(firstKnown(artist.YtSubs, catalog.YtSubs))
 	catalog.Tracks = catalog.Tracks[:min(limit, len(catalog.Tracks))]
 	reuseSaved(&catalog, saved)
 
@@ -62,15 +63,15 @@ func (a *App) collectCatalog(
 		stop()
 	}
 
-	catalog.Albums = pickStudioAlbums(catalog.Albums, groups)
+	catalog.Albums = pickStudioAlbums(catalog.Albums, groups, albumLimit)
 	if catalog.AlbumsRanked {
-		catalog.RankedAlbumIDs = rankedAlbumIDs(ranked, groups)
+		catalog.RankedAlbumIDs = rankedAlbumIDs(ranked, groups, albumLimit)
 	}
 
-	if needArtist || len(catalog.Tracks) < limit || source.NeedsAlbums(catalog.Albums) {
+	if needArtist || len(catalog.Tracks) < limit || source.NeedsAlbums(catalog.Albums, albumLimit) {
 		deps.fillGenius(ctx, &catalog, source.Lookup{
 			Name: artist.Name, GeniusID: artist.GeniusID, TrackLimit: limit - len(catalog.Tracks),
-			Base: catalog, NeedArtist: needArtist, StudioGroups: groups,
+			Base: catalog, NeedArtist: needArtist, StudioGroups: groups, AlbumLimit: albumLimit,
 		})
 	}
 
@@ -78,8 +79,8 @@ func (a *App) collectCatalog(
 	catalog.Tracks = catalog.Tracks[:min(limit, len(catalog.Tracks))]
 	reuseSaved(&catalog, saved)
 
-	catalog.Albums = pickStudioAlbums(catalog.Albums, groups)
-	addMusicBrainzAlbums(&catalog, groups, saved)
+	catalog.Albums = pickStudioAlbums(catalog.Albums, groups, albumLimit)
+	addMusicBrainzAlbums(&catalog, groups, saved, albumLimit)
 	deps.fillAlbumPlays(ctx, &catalog)
 
 	artist.YTMusicID = firstKnown(catalog.YTMusicID, artist.YTMusicID)
@@ -231,8 +232,9 @@ func (a *App) fillTrackGaps(
 func readMusicBrainz(
 	ctx context.Context, mb *source.MusicBrainz, artist *domain.Artist, catalog *source.Catalog,
 ) ([]source.Album, string) {
-	albums := pickStudioAlbums(catalog.Albums, nil)
-	needGroups := source.NeedsAlbums(albums) || slices.ContainsFunc(albums, func(album source.Album) bool {
+	albumLimit := domain.AlbumImportLimit(firstKnown(artist.YtSubs, catalog.YtSubs))
+	albums := pickStudioAlbums(catalog.Albums, nil, albumLimit)
+	needGroups := source.NeedsAlbums(albums, albumLimit) || slices.ContainsFunc(albums, func(album source.Album) bool {
 		return album.MusicBrainzID == ""
 	})
 	limit := importTrackLimit(*artist, catalog.YtSubs)
@@ -279,8 +281,8 @@ func readMusicBrainz(
 	return groups, name
 }
 
-func pickStudioAlbums(candidates, groups []source.Album) []source.Album {
-	albums := make([]source.Album, 0, source.StudioAlbumLimit)
+func pickStudioAlbums(candidates, groups []source.Album, limit int) []source.Album {
+	albums := make([]source.Album, 0, limit)
 	for _, album := range candidates {
 		if !source.IsStudioAlbum(album) || slices.ContainsFunc(albums, func(old source.Album) bool {
 			return source.SameAlbum(old, album) || sameTitle(old.Name, album.Name)
@@ -298,7 +300,7 @@ func pickStudioAlbums(candidates, groups []source.Album) []source.Album {
 		}
 
 		albums = append(albums, album)
-		if len(albums) == source.StudioAlbumLimit {
+		if len(albums) == limit {
 			break
 		}
 	}
@@ -306,10 +308,10 @@ func pickStudioAlbums(candidates, groups []source.Album) []source.Album {
 	return albums
 }
 
-func rankedAlbumIDs(ranked, groups []source.Album) []string {
+func rankedAlbumIDs(ranked, groups []source.Album, limit int) []string {
 	var ids []string
 
-	for _, album := range pickStudioAlbums(ranked, groups) {
+	for _, album := range pickStudioAlbums(ranked, groups, limit) {
 		if album.YTMusicID != nil {
 			ids = append(ids, *album.YTMusicID)
 		}
@@ -327,7 +329,7 @@ func matchingGroup(album source.Album, groups []source.Album) (source.Album, boo
 	return groups[index], true
 }
 
-func addMusicBrainzAlbums(catalog *source.Catalog, groups []source.Album, saved source.Catalog) {
+func addMusicBrainzAlbums(catalog *source.Catalog, groups []source.Album, saved source.Catalog, limit int) {
 	for i := range catalog.Albums {
 		album := &catalog.Albums[i]
 		if group, found := matchingGroup(*album, groups); found {
@@ -335,7 +337,7 @@ func addMusicBrainzAlbums(catalog *source.Catalog, groups []source.Album, saved 
 		}
 	}
 
-	catalog.Albums = pickStudioAlbums(append(catalog.Albums, groups...), groups)
+	catalog.Albums = pickStudioAlbums(append(catalog.Albums, groups...), groups, limit)
 	reuseSaved(catalog, saved)
 }
 
