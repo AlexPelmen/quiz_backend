@@ -161,6 +161,10 @@
                   "full_name": {
                     "type": "string"
                   },
+                  "yt_music_url": {
+                    "type": "string",
+                    "description": "Ссылка на исполнителя YouTube Music; ID определяется при парсинге."
+                  },
                   "country": {
                     "type": "string"
                   },
@@ -335,6 +339,10 @@
                   },
                   "full_name": {
                     "type": "string"
+                  },
+                  "yt_music_url": {
+                    "type": "string",
+                    "description": "Ссылка на исполнителя YouTube Music, доступна для изменения до определения ID."
                   },
                   "country": {
                     "type": "string"
@@ -3832,6 +3840,10 @@
           },
           "full_name": {
             "type": "string"
+          },
+          "yt_music_url": {
+            "type": "string",
+            "description": "Сохранённая ссылка или ссылка, сформированная по YouTube Music ID."
           },
           "country": {
             "type": "string"

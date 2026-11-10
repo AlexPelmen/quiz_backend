@@ -9,6 +9,8 @@ import (
 	"fmt"
 	"log/slog"
 	"math"
+	"net/url"
+	"regexp"
 	"slices"
 	"strings"
 	"unicode/utf8"
@@ -116,6 +118,7 @@ type ArtistForm struct {
 	FullName         *string   `json:"full_name"`
 	Country          *string   `json:"country"`
 	Artists          *[]string `json:"artists"`
+	YTMusicURL       *string   `json:"yt_music_url"`
 }
 
 // SaveArtist создаёт исполнителя либо применяет непустые поля формы.
@@ -137,12 +140,21 @@ func (a *App) SaveArtist(ctx context.Context, id *uuid.UUID, f ArtistForm) (doma
 				return err
 			}
 
-			if f.Status != nil && r.Status == "processing" {
+			if (f.Status != nil || f.YTMusicURL != nil) && r.Status == "processing" {
 				return fmt.Errorf("%w: исполнитель сейчас обрабатывается", domain.ErrConflict)
+			}
+			if f.YTMusicURL != nil && r.YTMusicID != nil && strings.TrimSpace(*f.YTMusicURL) != r.YTMusicURL {
+				return fmt.Errorf("%w: ID YouTube Music уже установлен", domain.ErrInvalid)
 			}
 		}
 
 		applyArtist(&r, f)
+		if f.YTMusicURL != nil && r.YTMusicURL != "" {
+			u, err := url.Parse(r.YTMusicURL)
+			if err != nil || u.Scheme != "https" || u.Host != "music.youtube.com" || u.User != nil || u.RawQuery != "" || u.Fragment != "" || !regexp.MustCompile(`^/(@[\pL\pN_.-]+|channel/UC[A-Za-z0-9_-]{22})/?$`).MatchString(u.Path) {
+				return fmt.Errorf("%w: укажите ссылку на страницу исполнителя music.youtube.com", domain.ErrInvalid)
+			}
+		}
 
 		if err := validateCatalogName(r.Name); err != nil {
 			return err
@@ -161,6 +173,10 @@ func (a *App) SaveArtist(ctx context.Context, id *uuid.UUID, f ArtistForm) (doma
 				if err = tx.Artists.SetStatus(ctx, r.ID, *f.Status); err == nil {
 					result, err = tx.Artists.Get(ctx, r.ID)
 				}
+			} else if err == nil && f.YTMusicURL != nil && r.YTMusicID == nil && r.YTMusicURL != "" {
+				if err = tx.Artists.SetStatus(ctx, r.ID, "created"); err == nil {
+					result, err = tx.Artists.Get(ctx, r.ID)
+				}
 			}
 		}
 
@@ -171,6 +187,9 @@ func (a *App) SaveArtist(ctx context.Context, id *uuid.UUID, f ArtistForm) (doma
 }
 
 func applyArtist(r *domain.Artist, f ArtistForm) {
+	if f.YTMusicURL != nil {
+		r.YTMusicURL = strings.TrimSpace(*f.YTMusicURL)
+	}
 	if f.Name != nil {
 		r.Name = strings.TrimSpace(*f.Name)
 	}

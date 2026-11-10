@@ -96,6 +96,36 @@ func TestArtistDeletionWithLinkedCatalog(t *testing.T) {
 	}
 }
 
+func TestArtistYTMusicURL(t *testing.T) {
+	pool, uow := testutil.Database(t)
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	call := client(t, httpapi.Router(service.New(uow, logger, ""), logger))
+	var artist domain.Artist
+	decodeResult(t, call("POST", "/api/v1/artists", `{"name":"Avantasia","yt_music_url":"https://music.youtube.com/@avantasiaofficial"}`, 201), &artist)
+	if artist.YTMusicURL != "https://music.youtube.com/@avantasiaofficial" {
+		t.Fatalf("ссылка не сохранена: %q", artist.YTMusicURL)
+	}
+	path := "/api/v1/artists/" + artist.ID.String()
+	call("PATCH", path, `{"yt_music_url":"https://example.com/@artist"}`, 400)
+	call("PATCH", path, `{"yt_music_url":""}`, 200)
+	if _, err := pool.Exec(t.Context(), "UPDATE artists SET status='parsed' WHERE id=$1", artist.ID); err != nil {
+		t.Fatal(err)
+	}
+	decodeResult(t, call("PATCH", path, `{"yt_music_url":"https://music.youtube.com/@avantasiaofficial"}`, 200), &artist)
+	if artist.Status != "created" {
+		t.Fatalf("исполнитель не поставлен в очередь: %q", artist.Status)
+	}
+	call("PATCH", path, `{"yt_music_url":""}`, 200)
+	if _, err := pool.Exec(t.Context(), "UPDATE artists SET yt_music_id=$1 WHERE id=$2", "UCNEStAEX0fKYbZIXTAW8Juw", artist.ID); err != nil {
+		t.Fatal(err)
+	}
+	decodeResult(t, call("GET", path, "", 200), &artist)
+	if artist.YTMusicURL != "https://music.youtube.com/channel/UCNEStAEX0fKYbZIXTAW8Juw" {
+		t.Fatalf("ссылка по ID не сформирована: %q", artist.YTMusicURL)
+	}
+	call("PATCH", path, `{"yt_music_url":"https://music.youtube.com/@other"}`, 400)
+}
+
 func uploadRecording(t *testing.T, router http.Handler, path string, audio []byte) domain.Download {
 	t.Helper()
 

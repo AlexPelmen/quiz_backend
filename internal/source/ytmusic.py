@@ -37,9 +37,20 @@ def without_latin_accents(text):
     return unicodedata.normalize("NFC", "".join(result))
 
 
+def artist_key(text, transliterate=False):
+    text = without_latin_accents(text).replace("&", "and")
+    if transliterate:
+        letters = dict(zip("абвгдеёжзийклмнопрстуфхцчшщъыьэюя", (
+            "a", "b", "v", "g", "d", "e", "e", "zh", "z", "i", "y", "k", "l", "m", "n", "o", "p", "r",
+            "s", "t", "u", "f", "kh", "ts", "ch", "sh", "shch", "", "y", "", "e", "yu", "ya")))
+        text = "".join(letters.get(char, char) for char in text)
+    return "".join(char for char in text if char.isalnum())
+
+
 def artist_candidates(rows, name):
-    exact, aliases = [], []
+    exact, aliases, compact, transliterated = [], [], [], []
     query, alias = normalized(name), without_latin_accents(name)
+    key, latin_key = artist_key(name), artist_key(name, transliterate=True)
     for row in rows:
         artist, artist_id = row.get("artist") or "", row.get("browseId")
         if not artist_id:
@@ -48,7 +59,11 @@ def artist_candidates(rows, name):
             exact.append(artist_id)
         elif without_latin_accents(artist) == alias:
             aliases.append(artist_id)
-    return list(dict.fromkeys(exact or aliases))
+        elif key and artist_key(artist) == key:
+            compact.append(artist_id)
+        elif latin_key and artist_key(artist, transliterate=True) == latin_key:
+            transliterated.append(artist_id)
+    return list(dict.fromkeys(exact or aliases or compact or transliterated))
 
 
 def count(value):
@@ -305,6 +320,34 @@ def load_catalog(yt, lookup):
     return catalog
 
 
+def remove_headerless_carousels(value):
+    if isinstance(value, list):
+        value[:] = [item for item in value if not (isinstance(item, dict)
+                    and "musicCarouselShelfRenderer" in item
+                    and "header" not in item["musicCarouselShelfRenderer"])]
+        for item in value:
+            remove_headerless_carousels(item)
+    elif isinstance(value, dict):
+        for item in value.values():
+            remove_headerless_carousels(item)
+
+
+class MusicClient(YTMusic):
+    def get_artist(self, channelId):
+        self._reading_artist = True
+        try:
+            return super().get_artist(channelId)
+        finally:
+            self._reading_artist = False
+
+    def _send_request(self, endpoint, body, *args, **kwargs):
+        response = super()._send_request(endpoint, body, *args, **kwargs)
+        if getattr(self, "_reading_artist", False) and endpoint == "browse":
+            # ytmusicapi 1.12.3 expects every artist carousel to have a header.
+            remove_headerless_carousels(response)
+        return response
+
+
 def music_client():
     from requests import Session
 
@@ -318,7 +361,7 @@ def music_client():
                 kwargs["timeout"] = 10
             return super().send(request, **kwargs)
 
-    return YTMusic(language="en", requests_session=PacedSession())
+    return MusicClient(language="en", requests_session=PacedSession())
 
 
 def parse_songs(rows):
@@ -348,6 +391,14 @@ def parse_request(yt, lookup):
     operation = lookup["operation"]
     key = lookup.get("key")
     name = lookup["name"]
+    if operation == "resolve_artist_url":
+        response = yt._send_request("navigation/resolve_url", {"url": key})
+        browse = (response.get("endpoint") or {}).get("browseEndpoint") or {}
+        config = (browse.get("browseEndpointContextSupportedConfigs") or {}).get("browseEndpointContextMusicConfig") or {}
+        artist_id = browse.get("browseId") or ""
+        if config.get("pageType") != "MUSIC_PAGE_TYPE_ARTIST" or not re.fullmatch(r"UC[\w-]{22}", artist_id):
+            raise ValueError("URL does not resolve to an artist")
+        return {"yt_music_id": artist_id}
     if operation == "search_artist":
         matches = artist_candidates(yt.search(name, filter="artists"), name)
         return {"yt_music_id": matches[0]} if len(matches) == 1 else {"artist_candidates": matches}
@@ -414,7 +465,10 @@ if __name__ == "__main__":
                 if status is None:
                     match = re.search(r"HTTP\s+(?:Error\s+)?([45][0-9]{2})\b", str(exc), re.IGNORECASE)
                     status = int(match[1]) if match else 0
-                result = {"failure": {"kind": type(exc).__name__, "status": status}}
+                kind = type(exc).__name__
+                if lookup.get("operation") == "resolve_artist_url" and isinstance(exc, ValueError):
+                    kind = "ссылка не ведёт на карточку исполнителя"
+                result = {"failure": {"kind": kind, "status": status}}
         elif lookup.get("albums"):
             result = load_album_plays(yt, lookup)
         elif lookup.get("tracks"):

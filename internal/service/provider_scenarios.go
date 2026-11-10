@@ -33,7 +33,11 @@ func (p *providerParser) youtube(ctx context.Context) error {
 	needTracks := p.needsList("tracks", len(p.tracks), ParseTrackLimit(p.artist.YtSubs))
 	var selected *source.Catalog
 	if p.artist.YTMusicID == nil {
-		data, ok, err := p.yt(ctx, "Поиск ID исполнителя", "search_artist", "", p.artist.ID)
+		label, operation, key := "Поиск ID исполнителя", "search_artist", ""
+		if p.artist.YTMusicURL != "" {
+			label, operation, key = "Ссылка на YouTube Music", "resolve_artist_url", p.artist.YTMusicURL
+		}
+		data, ok, err := p.yt(ctx, label, operation, key, p.artist.ID)
 		if err != nil {
 			return err
 		}

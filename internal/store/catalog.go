@@ -46,12 +46,12 @@ func (r ArtistRepository) Get(ctx context.Context, id uuid.UUID) (domain.Artist,
 // Create добавляет исполнителя в очередь будущего запуска парсинга.
 func (r ArtistRepository) Create(ctx context.Context, a domain.Artist) (domain.Artist, error) {
 	err := execute(ctx, r.db, `INSERT INTO artists(id,name,tags,excluded_from_quiz,full_name,country,
-        artists,manual_fields,yt_plays,yt_subs,members_known)
+        artists,manual_fields,yt_plays,yt_subs,members_known,yt_music_url)
         VALUES($1,$2,COALESCE($3::text[],'{}'),$4,$5,$6,COALESCE($7::text[],'{}'),
-            COALESCE($8::text[],'{}'),$9,$10,$11)`,
+            COALESCE($8::text[],'{}'),$9,$10,$11,$12)`,
 		[]any{
 			a.ID, a.Name, a.Tags, a.ExcludedFromQuiz, a.FullName, a.Country, a.Artists, a.ManualFields,
-			a.YtPlays, a.YtSubs, a.MembersKnown,
+			a.YtPlays, a.YtSubs, a.MembersKnown, a.YTMusicURL,
 		})
 	if err != nil {
 		return a, err
@@ -63,11 +63,11 @@ func (r ArtistRepository) Create(ctx context.Context, a domain.Artist) (domain.A
 // Update сохраняет редактируемые пользователем поля.
 func (r ArtistRepository) Update(ctx context.Context, a domain.Artist) (domain.Artist, error) {
 	err := execute(ctx, r.db, `UPDATE artists SET name=$2,tags=$3,excluded_from_quiz=$4,
-        full_name=$5,country=$6,artists=$7,manual_fields=$8,yt_plays=$9,yt_subs=$10,members_known=$11,
+        full_name=$5,country=$6,artists=$7,manual_fields=$8,yt_plays=$9,yt_subs=$10,members_known=$11,yt_music_url=$12,
         status=CASE WHEN status='manual' THEN 'parsed' ELSE status END,updated_at=now() WHERE id=$1`,
 		[]any{
 			a.ID, a.Name, a.Tags, a.ExcludedFromQuiz, a.FullName, a.Country, a.Artists, a.ManualFields,
-			a.YtPlays, a.YtSubs, a.MembersKnown,
+			a.YtPlays, a.YtSubs, a.MembersKnown, a.YTMusicURL,
 		})
 	if err != nil {
 		return a, err

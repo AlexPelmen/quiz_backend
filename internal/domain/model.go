@@ -33,6 +33,7 @@ type Artist struct {
 	Guessed          int64      `json:"guessed"`
 	ExcludedFromQuiz bool       `json:"excluded_from_quiz"`
 	YTMusicID        *string    `json:"yt_music_id"`
+	YTMusicURL       string     `json:"yt_music_url"`
 	MissingFields    []string   `json:"missing_fields"`
 	GeniusID         *int64     `json:"genius_id"`
 	MusicBrainzID    string     `json:"musicbrainz_id"`
