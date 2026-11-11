@@ -2,6 +2,7 @@ package service
 
 import (
 	"math"
+	"strings"
 	"testing"
 
 	"github.com/google/uuid"
@@ -80,6 +81,35 @@ func TestQuestionHintsAndAnswerInfo(t *testing.T) {
 	q, err := makeQuestion("artist_by_logo", c)
 	if err != nil || q.AnswerInfo["artist"] != "Artist" || q.AnswerInfo["track"] != "Song" || q.AnswerInfo["album"] != "Album" {
 		t.Fatalf("answer info: %#v, %v", q.AnswerInfo, err)
+	}
+}
+
+func TestQuestionsRemoveParentheticalNames(t *testing.T) {
+	c := domain.Candidate{
+		Artist:     domain.Artist{Name: "Artist (Live)"},
+		Track:      domain.Track{Name: "Song (Live (Remastered))"},
+		Album:      domain.Album{Name: "Album (Deluxe)"},
+		AlbumNames: []string{"First (Deluxe)", "Second (2024)"},
+		Sound:      &domain.Download{Meta: map[string]any{"duration_seconds": float64(60)}},
+	}
+	for kind := range roundBuilders {
+		q, err := makeQuestion(kind, c)
+		if err != nil {
+			t.Fatalf("%s: %v", kind, err)
+		}
+		if strings.ContainsAny(q.Answer+q.SecondaryText, "()") {
+			t.Errorf("%s: скобки в задании %+v", kind, q)
+		}
+		if q.AnswerInfo["artist"] != "Artist" || q.AnswerInfo["track"] != "Song" || q.AnswerInfo["album"] != "Album" {
+			t.Errorf("%s: ответ %+v", kind, q.AnswerInfo)
+		}
+	}
+	if c.Track.Name != "Song (Live (Remastered))" {
+		t.Fatal("изменено исходное название")
+	}
+	item := sequenceName(domain.Artist{Name: "Band (Guest)"})
+	if item.length != 4 || item.last != 'd' {
+		t.Fatalf("название в последовательности: %+v", item)
 	}
 }
 

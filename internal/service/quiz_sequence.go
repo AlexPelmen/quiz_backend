@@ -66,9 +66,10 @@ func buildSequenceRound(
 
 func sequenceName(artist domain.Artist) sequenceArtist {
 	item := sequenceArtist{artist: artist}
-	name := latinArtistName(artist.Name)
+	cleanName := cleanQuestionName(artist.Name)
+	name := latinArtistName(cleanName)
 
-	for _, r := range artist.Name {
+	for _, r := range cleanName {
 		if unicode.IsLetter(r) {
 			item.length++
 		}
@@ -142,7 +143,7 @@ func initialHint(name string) string {
 }
 
 func cityName(artist domain.Artist) sequenceArtist {
-	name := latinArtistName(withoutArticle(artist.Name))
+	name := latinArtistName(withoutArticle(cleanQuestionName(artist.Name)))
 	// Знаки оформления пропускаем, цифры на краях оставляем, чтобы не подменять их буквами.
 	trimmed := strings.TrimFunc(name, func(r rune) bool { return !unicode.IsLetter(r) && !unicode.IsDigit(r) })
 	first, _ := utf8.DecodeRuneInString(trimmed)

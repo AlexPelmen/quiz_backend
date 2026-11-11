@@ -8,6 +8,7 @@ import (
 	"math"
 	"math/rand/v2"
 	"regexp"
+	"slices"
 	"strings"
 	"unicode"
 
@@ -233,6 +234,23 @@ func makeQuestion(kind string, c domain.Candidate) (domain.Question, error) {
 	if !ok {
 		return domain.Question{}, fmt.Errorf("%w: неизвестный раунд", domain.ErrInvalid)
 	}
+	c.Artist.Name = cleanQuestionName(c.Artist.Name)
+	c.Track.Name = cleanQuestionName(c.Track.Name)
+	c.Album.Name = cleanQuestionName(c.Album.Name)
+	if c.Artist.Name == "" || (kind == "track_vowels" && c.Track.Name == "") {
+		return domain.Question{}, fmt.Errorf("%w: название после удаления скобок пустое", domain.ErrInvalid)
+	}
+	cleanAlbums := make([]string, 0, len(c.AlbumNames))
+	for _, name := range c.AlbumNames {
+		name = cleanQuestionName(name)
+		if name != "" && !slices.Contains(cleanAlbums, name) {
+			cleanAlbums = append(cleanAlbums, name)
+		}
+	}
+	c.AlbumNames = cleanAlbums
+	if kind == "artist_by_albums" && len(c.AlbumNames) == 0 {
+		return domain.Question{}, fmt.Errorf("%w: нет названий альбомов после удаления скобок", domain.ErrInvalid)
+	}
 
 	q := builder(c)
 	q.ArtistID = c.Artist.ID
@@ -298,11 +316,15 @@ func trackVowels(c domain.Candidate) domain.Question {
 
 var parenthetical = regexp.MustCompile(`\([^()]*\)`)
 
-func vowelHint(name string) string {
+func cleanQuestionName(name string) string {
 	for parenthetical.MatchString(name) {
 		name = parenthetical.ReplaceAllString(name, "")
 	}
+	return strings.Join(strings.Fields(name), " ")
+}
 
+func vowelHint(name string) string {
+	name = cleanQuestionName(name)
 	hint := strings.Map(func(r rune) rune {
 		r = unicode.ToLower(r)
 		if r == '_' || (unicode.IsLetter(r) && !strings.ContainsRune("аеёиоуыэюяaeiouy", r)) {
