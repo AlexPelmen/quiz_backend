@@ -297,7 +297,7 @@ func TestWeightedSelection(t *testing.T) {
 	}
 }
 
-func TestTrackShortlistControlsQuizSelection(t *testing.T) {
+func TestReadyTrackRemainsAvailableOutsideShortlist(t *testing.T) {
 	pool, uow := testutil.Database(t)
 	ctx := t.Context()
 	artist := seedCandidate(t, pool, 1)
@@ -313,13 +313,17 @@ func TestTrackShortlistControlsQuizSelection(t *testing.T) {
 	if err := uow.Tracks.SaveShortlist(ctx, artist, []uuid.UUID{newTrack}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := uow.Packs.Pick(ctx, []uuid.UUID{}, store.PickFilter{Kind: "artist_by_track"}); !errors.Is(err, domain.ErrNotFound) {
-		t.Fatalf("старый трек не должен заменять незагруженный выбранный: %v", err)
+	candidate, err := uow.Packs.Pick(ctx, []uuid.UUID{}, store.PickFilter{Kind: "artist_by_track"})
+	if err != nil || candidate.Track.ID != oldTrack {
+		t.Fatalf("старый готовый трек должен оставаться доступен: %+v %v", candidate.Track, err)
 	}
 	if err := uow.Downloads.Link(ctx, newTrack, audio); err != nil {
 		t.Fatal(err)
 	}
-	candidate, err := uow.Packs.Pick(ctx, []uuid.UUID{}, store.PickFilter{Kind: "artist_by_track"})
+	if _, err := pool.Exec(ctx, `UPDATE tracks SET excluded_from_quiz=true WHERE id=$1`, oldTrack); err != nil {
+		t.Fatal(err)
+	}
+	candidate, err = uow.Packs.Pick(ctx, []uuid.UUID{}, store.PickFilter{Kind: "artist_by_track"})
 	if err != nil || candidate.Track.ID != newTrack {
 		t.Fatalf("выбран неверный трек: %+v %v", candidate.Track, err)
 	}
@@ -327,6 +331,9 @@ func TestTrackShortlistControlsQuizSelection(t *testing.T) {
 		t.Fatalf("старый трек удалён: %v", err)
 	}
 	if err = uow.Tracks.Delete(ctx, newTrack); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `UPDATE tracks SET excluded_from_quiz=false WHERE id=$1`, oldTrack); err != nil {
 		t.Fatal(err)
 	}
 	candidate, err = uow.Packs.Pick(ctx, []uuid.UUID{}, store.PickFilter{Kind: "artist_by_track"})

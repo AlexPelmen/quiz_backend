@@ -14,6 +14,7 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"devkeeper.com/quiz/internal/auth"
 	"devkeeper.com/quiz/internal/httpapi"
 	"devkeeper.com/quiz/internal/service"
 	"devkeeper.com/quiz/internal/store"
@@ -49,6 +50,10 @@ func run(logger *slog.Logger) error {
 	}
 
 	app := service.New(uow, logger, os.Getenv("GENIUS_ACCESS_TOKEN"))
+	authorization, err := auth.New(pool)
+	if err != nil {
+		return err
+	}
 
 	address := os.Getenv("HTTP_ADDR")
 	if address == "" {
@@ -56,7 +61,7 @@ func run(logger *slog.Logger) error {
 	}
 
 	server := &http.Server{
-		Addr: address, Handler: httpapi.Router(app, logger),
+		Addr: address, Handler: auth.Handler(httpapi.Router(app, logger), authorization, os.Getenv("AUTH_COOKIE_SECURE") == "true"),
 		ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 30 * time.Second,
 		IdleTimeout: 60 * time.Second, MaxHeaderBytes: 1 << 20,
 		BaseContext: nil,

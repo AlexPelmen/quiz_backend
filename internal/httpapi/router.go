@@ -64,6 +64,7 @@ func Router(app *service.App, logger *slog.Logger) *gin.Engine {
 	v1.POST("/tracks/:id/audio", h.upload("tracks"))
 	v1.GET("/tracks/:id/artists", h.trackArtists)
 	v1.POST("/artists/:id/retry", h.retryArtist)
+	v1.POST("/parsing-errors/:id/requeue", h.requeueArtist)
 	v1.POST("/parsing-runs", h.startParsing)
 	v1.POST("/parsing-runs/:id/stop", h.stopParsing)
 	v1.GET("/parsing-runs/:id/events", h.parseEvents)
@@ -496,6 +497,17 @@ func (a *api) retryArtist(c *gin.Context) {
 	}
 
 	c.Status(http.StatusNoContent)
+}
+
+func (a *api) requeueArtist(c *gin.Context) {
+	id, err := requestID(c)
+	if err != nil {
+		a.respond(c, nil, err)
+		return
+	}
+	status := "created"
+	value, err := a.app.SaveArtist(c.Request.Context(), id, service.ArtistForm{Status: &status})
+	a.respond(c, value, err)
 }
 
 func (a *api) startDownloads(c *gin.Context) {
