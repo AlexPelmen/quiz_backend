@@ -180,6 +180,9 @@ type StartDownloadsForm struct {
 	Downloader  string      `json:"downloader"`
 	DownloadIDs []uuid.UUID `json:"download_ids"`
 	AllWaiting  bool        `json:"all_waiting"`
+	AllMatching bool        `json:"all_matching"`
+	Status      string      `json:"status"`
+	ExcludedIDs []uuid.UUID `json:"excluded_ids"`
 }
 
 // StartDownloads запускает только выбранные задания одного загрузчика.
@@ -188,6 +191,15 @@ func (a *App) StartDownloads(ctx context.Context, f StartDownloadsForm) (int64, 
 	case "yt_music", "hitmo", "genius_youtube", "genius_short", "image":
 	default:
 		return 0, fmt.Errorf("%w: неизвестный загрузчик", domain.ErrInvalid)
+	}
+	if f.AllMatching {
+		if f.AllWaiting || len(f.DownloadIDs) != 0 || (f.Status != "" && f.Status != "created" && f.Status != "errored" && f.Status != "manual") {
+			return 0, fmt.Errorf("%w: неверные параметры выбора", domain.ErrInvalid)
+		}
+		if f.ExcludedIDs == nil {
+			f.ExcludedIDs = []uuid.UUID{}
+		}
+		return a.uow.Downloads.StartMatching(ctx, f.Downloader, f.Status, f.ExcludedIDs)
 	}
 	if f.AllWaiting {
 		if len(f.DownloadIDs) != 0 {
@@ -311,8 +323,8 @@ func downloadFile(ctx context.Context, s domain.Settings, d *domain.Download, di
 		return err
 	}
 
-	path := filepath.Join(targetDir, d.ID.String()+"."+d.FileType)
-	if err := os.Rename(input, path); err != nil {
+	path, err := linkMediaFile(input, targetDir, mediaName(tagValue(d.Meta, "artist"), tagValue(d.Meta, "title"), d.Preview), d.FileType, d.ID)
+	if err != nil {
 		return err
 	}
 
@@ -386,13 +398,25 @@ func (a *App) Audio(ctx context.Context, packID uuid.UUID, number int) (string, 
 	if err != nil {
 		return "", err
 	}
-
-	return a.media.clip(ctx, s, clipInput{Question: q, Download: d})
+	artist, err := a.uow.Artists.Get(ctx, q.ArtistID)
+	if err != nil {
+		return "", err
+	}
+	if q.TrackID == nil {
+		return "", domain.ErrNotFound
+	}
+	track, err := a.uow.Tracks.Get(ctx, *q.TrackID)
+	if err != nil {
+		return "", err
+	}
+	return a.media.clip(ctx, s, clipInput{Question: q, Download: d, Artist: artist.Name, Title: track.Name})
 }
 
 type clipInput struct {
 	Question domain.Question
 	Download domain.Download
+	Artist   string
+	Title    string
 }
 
 func (m *Media) clip(ctx context.Context, s domain.Settings, in clipInput) (path string, result error) {
@@ -404,6 +428,14 @@ func (m *Media) clip(ctx context.Context, s domain.Settings, in clipInput) (path
 		return path, nil
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return "", err
+	}
+	if name := mediaName(in.Artist, in.Title, true); name != "" {
+		path = filepath.Join(dir, name+" - "+q.ID.String()+".mp3")
+		if _, err := os.Stat(path); err == nil {
+			return path, nil
+		} else if !errors.Is(err, os.ErrNotExist) {
+			return "", err
+		}
 	}
 
 	if err := os.MkdirAll(dir, 0o750); err != nil {

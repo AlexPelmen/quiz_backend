@@ -62,6 +62,8 @@ func TestQuestionHintsAndAnswerInfo(t *testing.T) {
 	for _, tc := range []struct{ name, want string }{
 		{"The Doors", "D/Д"},
 		{"The Beatles", "B/Б"},
+		{"A Day To Remember", "A/А"},
+		{"An Endless Sporadic", "A/А"},
 		{"tHe  Cure", "C/К"},
 		{"Therapy?", "T/Т"},
 		{"The", "T/Т"},

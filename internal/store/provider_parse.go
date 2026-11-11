@@ -41,6 +41,7 @@ func (r ArtistRepository) ClaimProvider(ctx context.Context, seconds int, starte
 // FillProvider дополняет пустые поля исполнителя, удерживая захват очереди.
 func (r ArtistRepository) FillProvider(ctx context.Context, a domain.Artist) error {
 	return execute(ctx, r.db, `UPDATE artists SET
+        name=CASE WHEN name=yt_music_url AND yt_music_url<>'' AND $12<>'' THEN $12 ELSE name END,
         full_name=COALESCE(NULLIF(full_name,''),$2),country=COALESCE(NULLIF(country,''),$3),
         artists=CASE WHEN NOT members_known AND $4 THEN $5 ELSE artists END,
         members_known=members_known OR $4,
@@ -51,7 +52,7 @@ func (r ArtistRepository) FillProvider(ctx context.Context, a domain.Artist) err
             SELECT 1 FROM downloads WHERE id=logo_download_id AND status IN ('manual','errored'))
             THEN COALESCE($11,logo_download_id) ELSE logo_download_id END
         WHERE id=$1 AND status='processing'`, []any{
-		a.ID, a.FullName, a.Country, a.MembersKnown, a.Artists, a.YtSubs, a.YtPlays, a.YTMusicID, a.GeniusID, a.MusicBrainzID, a.LogoDownloadID,
+		a.ID, a.FullName, a.Country, a.MembersKnown, a.Artists, a.YtSubs, a.YtPlays, a.YTMusicID, a.GeniusID, a.MusicBrainzID, a.LogoDownloadID, a.Name,
 	})
 }
 

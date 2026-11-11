@@ -137,9 +137,9 @@ func TestTrackImportReusesRecordingAcrossArtists(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	remaining, err := uow.Tracks.List(ctx, domain.Page{ArtistID: &artists[1], Limit: 10})
-	if err != nil || len(remaining) != 0 {
-		t.Fatalf("совместная запись должна быть удалена: %+v, %v", remaining, err)
+	saved, err := uow.Tracks.Get(ctx, recording)
+	if err != nil || saved.ArtistID != artists[1] {
+		t.Fatalf("совместная запись после удаления основного исполнителя: %+v, %v", saved, err)
 	}
 }
 

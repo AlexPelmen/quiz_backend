@@ -19,7 +19,8 @@ import (
 
 // Upload проверяет файл и назначает его изображением или основной записью каталога.
 func (a *App) Upload(ctx context.Context, resource string, id uuid.UUID, input io.Reader) (domain.Download, error) {
-	if _, err := a.readOne(ctx, resource, id); err != nil {
+	entity, err := a.readOne(ctx, resource, id)
+	if err != nil {
 		return domain.Download{}, err
 	}
 
@@ -34,6 +35,33 @@ func (a *App) Upload(ctx context.Context, resource string, id uuid.UUID, input i
 	d, err := stageUpload(ctx, settings, resource, input)
 	if err != nil {
 		return domain.Download{}, err
+	}
+	var artistName, title string
+	switch value := entity.(type) {
+	case domain.Artist:
+		artistName = value.Name
+	case domain.Album:
+		artist, lookupErr := a.uow.Artists.Get(ctx, value.ArtistID)
+		if lookupErr != nil {
+			a.cleanupUpload(ctx, d)
+			return domain.Download{}, lookupErr
+		}
+		artistName, title = artist.Name, value.Name
+	case domain.TrackWithStatus:
+		artist, lookupErr := a.uow.Artists.Get(ctx, value.ArtistID)
+		if lookupErr != nil {
+			a.cleanupUpload(ctx, d)
+			return domain.Download{}, lookupErr
+		}
+		artistName, title = artist.Name, value.Name
+	}
+	if name := mediaName(artistName, title, false); name != "" {
+		path, renameErr := linkMediaFile(d.URI, filepath.Dir(d.URI), name, d.FileType, d.ID)
+		if renameErr != nil {
+			a.cleanupUpload(ctx, d)
+			return domain.Download{}, renameErr
+		}
+		d.URI = path
 	}
 
 	saved, err := a.saveUpload(ctx, resource, id, d)

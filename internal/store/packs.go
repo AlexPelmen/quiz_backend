@@ -29,7 +29,6 @@ func (r PackRepository) Pick(ctx context.Context, excluded []uuid.UUID, filter P
             WHERE al.artist_id=a.id AND NOT al.excluded_from_quiz AND strpos(lower(al.name),lower(a.name))=0)>=2
         ELSE EXISTS(SELECT 1 FROM tracks t JOIN artist_to_track owner ON owner.track_id=t.id
             WHERE owner.artist_id=a.id AND NOT t.excluded_from_quiz
-            AND `+rankedTrack+`
             AND ($3<>'track_vowels' OR quiz_title_has_consonant(t.name)) AND EXISTS(`+finishedAudio+`)) END`,
 		"e.*", filter, []any{excluded, filter.Tag, filter.Kind})
 
@@ -69,7 +68,7 @@ func (r PackRepository) AudioArtists(
         WHERE NOT a.excluded_from_quiz AND a.status IN ('parsed','manual','partial','error') AND NOT(a.id=ANY($1::uuid[]))
         AND ($2='' OR $2=ANY(a.tags)) AND EXISTS(SELECT 1 FROM tracks t
             JOIN artist_to_track owner ON owner.track_id=t.id
-            WHERE owner.artist_id=a.id AND NOT t.excluded_from_quiz AND `+rankedTrack+` AND EXISTS(`+finishedAudio+`))`,
+            WHERE owner.artist_id=a.id AND NOT t.excluded_from_quiz AND EXISTS(`+finishedAudio+`))`,
 		"e.*", filter, []any{excluded, filter.Tag})
 
 	return query[domain.Artist](ctx, r.db, sql, args)
@@ -107,20 +106,19 @@ const finishedAudio = `SELECT d FROM track_to_download td JOIN downloads d ON d.
     WHERE td.track_id=t.id AND d.status='finished' AND d.file_type='mp3'
     AND (d.meta->>'duration_seconds')::double precision>0`
 
-const rankedTrack = `NOT EXISTS (SELECT 1 FROM artist_track_shortlists shortlist
-    WHERE shortlist.artist_id=owner.artist_id AND NOT (t.id=ANY(shortlist.track_ids)))`
-
 // PickTrack выбирает готовый трек для заданного исполнителя.
 func (r PackRepository) PickTrack(
 	ctx context.Context, c domain.Candidate, filter PickFilter,
 ) (domain.Candidate, error) {
+	// Треки ранжируются по прослушиваниям; общая настройка угадываемости
+	// продолжает применяться при выборе исполнителей и альбомов.
+	filter.GuessRateEnabled = false
 	sql, args := rankCandidates(`SELECT t.*,to_jsonb(al) AS album,to_jsonb(sound.d) AS sound
         FROM catalog_tracks t LEFT JOIN catalog_albums al ON al.id=t.album_id
         JOIN LATERAL (`+finishedAudio+`
             ORDER BY d.preview,(d.source_type='upload') DESC,
             CASE WHEN d.source_type='upload' THEN d.created_at END DESC,d.created_at,d.id LIMIT 1) sound ON true
-		WHERE t.artist_id=$1 AND NOT t.excluded_from_quiz AND ($2<>'track_vowels' OR quiz_title_has_consonant(t.name))
-        AND NOT EXISTS (SELECT 1 FROM artist_track_shortlists shortlist WHERE shortlist.artist_id=$1 AND NOT (t.id=ANY(shortlist.track_ids)))`,
+		WHERE t.artist_id=$1 AND NOT t.excluded_from_quiz AND ($2<>'track_vowels' OR quiz_title_has_consonant(t.name))`,
 		"to_jsonb(e)-'album'-'sound',COALESCE(e.album,'{}'::jsonb),e.sound", filter, []any{c.Artist.ID, filter.Kind})
 
 	err := r.db.QueryRow(ctx, sql+" LIMIT 1", args...).Scan(&c.Track, &c.Album, &c.Sound)

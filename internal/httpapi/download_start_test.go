@@ -141,3 +141,33 @@ func TestStartAllWaitingByMediaType(t *testing.T) {
 		t.Fatalf("ожидалась одна аудиозапись, получено %d", result.Queued)
 	}
 }
+
+func TestStartMatchingExcludesRowsAndRespectsStatus(t *testing.T) {
+	pool, uow := testutil.Database(t)
+	ctx := t.Context()
+	kept, excluded, other := uuid.New(), uuid.New(), uuid.New()
+	for i, id := range []uuid.UUID{kept, excluded, other} {
+		status := "errored"
+		if i == 2 {
+			status = "created"
+		}
+		if _, err := pool.Exec(ctx, `INSERT INTO downloads(id,source_type,source_uri,file_type,status) VALUES($1,'image',$2,'image',$3)`, id, "https://example.com/"+id.String(), status); err != nil {
+			t.Fatal(err)
+		}
+	}
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	call := client(t, httpapi.Router(service.New(uow, logger, ""), logger))
+	var result struct {
+		Queued int `json:"queued"`
+	}
+	decodeResult(t, call("POST", "/api/v1/downloads/start", fmt.Sprintf(`{"downloader":"image","all_matching":true,"status":"errored","excluded_ids":[%q]}`, excluded), 201), &result)
+	if result.Queued != 1 {
+		t.Fatalf("запущено %d заданий", result.Queued)
+	}
+	for id, want := range map[uuid.UUID]string{kept: "pending", excluded: "errored", other: "created"} {
+		d, err := uow.Downloads.Get(ctx, id)
+		if err != nil || d.Status != want {
+			t.Fatalf("статус %s: %+v, %v", id, d, err)
+		}
+	}
+}

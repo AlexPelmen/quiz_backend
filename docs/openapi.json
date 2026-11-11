@@ -1431,6 +1431,18 @@
               "type": "string",
               "format": "uuid"
             }
+          },
+          {
+            "name": "file_type",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "mp3",
+                "image"
+              ]
+            },
+            "description": "Фильтр музыки или изображений."
           }
         ],
         "responses": {
@@ -1704,7 +1716,11 @@
                     "description": "Совместимый запуск YouTube Music с постановкой ранее обработанных исполнителей в очередь. Используется без provider."
                   },
                   "provider": {
-                    "enum": ["yt_music", "genius", "musicbrainz"],
+                    "enum": [
+                      "yt_music",
+                      "genius",
+                      "musicbrainz"
+                    ],
                     "description": "Единственный источник запуска. По умолчанию YouTube Music."
                   }
                 }
@@ -3656,6 +3672,28 @@
                   "all_waiting": {
                     "type": "boolean",
                     "description": "Запустить все совместимые задания в состоянии created; нельзя сочетать с download_ids."
+                  },
+                  "all_matching": {
+                    "type": "boolean",
+                    "description": "Запустить все совместимые задания в выбранном состоянии, кроме excluded_ids; нельзя сочетать с download_ids и all_waiting."
+                  },
+                  "status": {
+                    "type": "string",
+                    "enum": [
+                      "",
+                      "created",
+                      "errored",
+                      "manual"
+                    ],
+                    "description": "Фильтр состояния при all_matching."
+                  },
+                  "excluded_ids": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "format": "uuid"
+                    },
+                    "description": "Исключения при all_matching."
                   }
                 }
               }
@@ -3815,6 +3853,173 @@
                 }
               }
             }
+          }
+        }
+      }
+    },
+    "/api/v1/storage": {
+      "get": {
+        "summary": "Сводка хранилища и файлы без ссылок",
+        "description": "Сканирует обычные файлы в storage_dir; скрытые временные каталоги и символические ссылки не учитываются. Учитывает ссылки каталога и квиза.",
+        "responses": {
+          "200": {
+            "description": "Сводка и относительные пути файлов",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "total",
+                    "kinds",
+                    "orphans"
+                  ],
+                  "properties": {
+                    "total": {
+                      "$ref": "#/components/schemas/StorageSize"
+                    },
+                    "kinds": {
+                      "type": "object",
+                      "additionalProperties": {
+                        "$ref": "#/components/schemas/StorageSize"
+                      }
+                    },
+                    "orphans": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "required": [
+                          "path",
+                          "size",
+                          "kind"
+                        ],
+                        "properties": {
+                          "path": {
+                            "type": "string"
+                          },
+                          "size": {
+                            "type": "integer",
+                            "format": "int64"
+                          },
+                          "kind": {
+                            "type": "string"
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Ошибка сканирования или базы"
+          }
+        }
+      }
+    },
+    "/api/v1/storage/actions": {
+      "post": {
+        "summary": "Удалить или привязать выбранные файлы без ссылок",
+        "description": "Проверяет каждый файл повторно; привязка требует единственного совпадения с каталогом и не заменяет существующие изображения.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "action",
+                  "paths"
+                ],
+                "additionalProperties": false,
+                "properties": {
+                  "action": {
+                    "type": "string",
+                    "enum": [
+                      "delete",
+                      "attach"
+                    ]
+                  },
+                  "paths": {
+                    "type": "array",
+                    "minItems": 1,
+                    "maxItems": 200,
+                    "items": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Результат по каждому файлу",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "required": [
+                      "path"
+                    ],
+                    "properties": {
+                      "path": {
+                        "type": "string"
+                      },
+                      "error": {
+                        "type": "string"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Неверное действие или выбор"
+          },
+          "500": {
+            "description": "Ошибка сервера"
+          }
+        }
+      }
+    },
+    "/api/v1/tracks/{id}/artists": {
+      "get": {
+        "summary": "Получить всех исполнителей трека",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Исполнители трека, основной первым",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/Artist"
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Некорректный ID"
+          },
+          "404": {
+            "description": "Трек не найден"
           }
         }
       }
@@ -4265,12 +4470,29 @@
         "type": "object",
         "properties": {
           "provider": {
-            "enum": ["", "yt_music", "genius", "musicbrainz"]
+            "enum": [
+              "",
+              "yt_music",
+              "genius",
+              "musicbrainz"
+            ]
           },
-          "fields": {"type": "integer", "minimum": 0},
-          "albums": {"type": "integer", "minimum": 0},
-          "tracks": {"type": "integer", "minimum": 0},
-          "errors": {"type": "integer", "minimum": 0},
+          "fields": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "albums": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "tracks": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "errors": {
+            "type": "integer",
+            "minimum": 0
+          },
           "id": {
             "type": "string",
             "format": "uuid"
@@ -4977,6 +5199,22 @@
           "protected": {
             "type": "boolean",
             "description": "Альбом используется сохранённым квизом."
+          }
+        }
+      },
+      "StorageSize": {
+        "type": "object",
+        "required": [
+          "count",
+          "bytes"
+        ],
+        "properties": {
+          "count": {
+            "type": "integer"
+          },
+          "bytes": {
+            "type": "integer",
+            "format": "int64"
           }
         }
       }

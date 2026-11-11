@@ -134,10 +134,10 @@ func (r DownloadRepository) Get(ctx context.Context, id uuid.UUID) (domain.Downl
 // List возвращает страницу загрузок, при необходимости конкретного трека.
 func (r DownloadRepository) List(ctx context.Context, p domain.Page) ([]domain.Download, error) {
 	return query[domain.Download](ctx, r.db, `SELECT d.* FROM downloads d
-		WHERE ($3='' OR d.status=$3) AND ($4::uuid IS NULL OR EXISTS(
+		WHERE ($3='' OR d.status=$3) AND ($5='' OR ($5='mp3' AND d.file_type='mp3') OR ($5='image' AND d.file_type<>'mp3')) AND ($4::uuid IS NULL OR EXISTS(
 		SELECT 1 FROM track_to_download td WHERE td.download_id=d.id AND td.track_id=$4))
 		ORDER BY ($4::uuid IS NOT NULL AND d.source_type='upload') DESC,d.created_at DESC,d.id DESC
-		LIMIT $1 OFFSET $2`, []any{p.Limit, p.Offset, p.Status, p.TrackID})
+		LIMIT $1 OFFSET $2`, []any{p.Limit, p.Offset, p.Status, p.TrackID, p.FileType})
 }
 
 // Claim атомарно захватывает задачу; истёкший захват позволяет восстановить работу.
@@ -194,6 +194,22 @@ func (r DownloadRepository) StartAllWaiting(ctx context.Context, downloader stri
         ORDER BY id FOR UPDATE
     ) UPDATE downloads SET status='pending',downloader=$1,preview=false,attempts=0,error='',
         next_attempt_at=now(),lease_until=NULL,updated_at=now() WHERE id IN (SELECT id FROM ready)`, downloader)
+	if err != nil {
+		return 0, translate(err)
+	}
+	return result.RowsAffected(), nil
+}
+
+// StartMatching ставит в очередь подходящие задания выбранного типа и состояния.
+func (r DownloadRepository) StartMatching(ctx context.Context, downloader, status string, excluded []uuid.UUID) (int64, error) {
+	result, err := r.db.Exec(ctx, `WITH ready AS (
+        SELECT id FROM downloads WHERE status IN ('created','errored','manual') AND ($2='' OR status=$2)
+        AND NOT (id=ANY($3::uuid[]))
+        AND CASE WHEN $1='image' THEN source_type='image' AND source_uri<>''
+            ELSE file_type='mp3' AND EXISTS(SELECT 1 FROM track_to_download WHERE download_id=downloads.id) END
+        ORDER BY id FOR UPDATE
+    ) UPDATE downloads SET status='pending',downloader=$1,preview=false,attempts=0,error='',
+        next_attempt_at=now(),lease_until=NULL,updated_at=now() WHERE id IN (SELECT id FROM ready)`, downloader, status, excluded)
 	if err != nil {
 		return 0, translate(err)
 	}

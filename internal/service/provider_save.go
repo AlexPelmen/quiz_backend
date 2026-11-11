@@ -87,6 +87,9 @@ func (p *providerParser) saveArtist(ctx context.Context, tx *store.UnitOfWork, c
 		MembersKnown: mb.MembersKnown, YtSubs: c.YtSubs, YtPlays: c.YtPlays, YTMusicID: c.YTMusicID,
 		GeniusID: optionalID(c.ArtistID), MusicBrainzID: mb.ID,
 	}
+	if p.run.Provider == "yt_music" && old.Name == old.YTMusicURL && old.YTMusicURL != "" {
+		data.Name = c.Name
+	}
 	if data.Artists == nil {
 		data.Artists = []string{}
 	}

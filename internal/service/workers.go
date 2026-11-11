@@ -111,6 +111,13 @@ func (a *App) downloadNext(ctx context.Context, s domain.Settings) error {
 
 		resolved, err = a.resolveAudio(taskCtx, s, d)
 		if err == nil {
+			var artist, title string
+			artist, title, err = a.uow.Downloads.DownloadNames(taskCtx, d.ID)
+			if err == nil {
+				resolved.Meta["artist"], resolved.Meta["title"] = artist, title
+			}
+		}
+		if err == nil {
 			err = downloadFile(taskCtx, s, &resolved, directory)
 			d.URI, d.Meta, d.Preview, d.FileType = resolved.URI, resolved.Meta, resolved.Preview, resolved.FileType
 		}

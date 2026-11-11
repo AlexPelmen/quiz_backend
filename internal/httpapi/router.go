@@ -62,6 +62,7 @@ func Router(app *service.App, logger *slog.Logger) *gin.Engine {
 	v1.POST("/artists/:id/image", h.upload("artists"))
 	v1.POST("/albums/:id/cover", h.upload("albums"))
 	v1.POST("/tracks/:id/audio", h.upload("tracks"))
+	v1.GET("/tracks/:id/artists", h.trackArtists)
 	v1.POST("/artists/:id/retry", h.retryArtist)
 	v1.POST("/parsing-runs", h.startParsing)
 	v1.POST("/parsing-runs/:id/stop", h.stopParsing)
@@ -71,6 +72,8 @@ func Router(app *service.App, logger *slog.Logger) *gin.Engine {
 	v1.POST("/downloads/:id/retry", h.retryDownload)
 	v1.POST("/downloads/start", h.startDownloads)
 	v1.GET("/downloads/:id/file", h.file)
+	v1.GET("/storage", h.storageReport)
+	v1.POST("/storage/actions", h.storageAction)
 	v1.GET("/quiz-packs/:id/questions/:number/audio", h.audio)
 	v1.POST("/quiz-rounds/:id/results", h.recordRoundResult)
 	v1.GET("/settings", h.settings)
@@ -143,7 +146,7 @@ func requestID(c *gin.Context) (*uuid.UUID, error) {
 }
 
 func page(c *gin.Context) (domain.Page, error) {
-	p := domain.Page{Limit: 50, Status: c.Query("status"), AudioStatus: c.Query("audio_status"), Tag: c.Query("tag")}
+	p := domain.Page{Limit: 50, Status: c.Query("status"), AudioStatus: c.Query("audio_status"), FileType: c.Query("file_type"), Tag: c.Query("tag")}
 	for key, target := range map[string]*int{"limit": &p.Limit, "offset": &p.Offset} {
 		if raw := c.Query(key); raw != "" {
 			n, err := strconv.Atoi(raw)
@@ -504,6 +507,34 @@ func (a *api) startDownloads(c *gin.Context) {
 
 	count, err := a.app.StartDownloads(c.Request.Context(), form)
 	a.respond(c, gin.H{"queued": count}, err)
+}
+
+func (a *api) storageReport(c *gin.Context) {
+	value, err := a.app.StorageReport(c.Request.Context())
+	a.respond(c, value, err)
+}
+
+func (a *api) trackArtists(c *gin.Context) {
+	id, err := requestID(c)
+	if err != nil {
+		a.respond(c, nil, err)
+		return
+	}
+	value, err := a.app.TrackArtists(c.Request.Context(), *id)
+	a.respond(c, value, err)
+}
+
+func (a *api) storageAction(c *gin.Context) {
+	var form struct {
+		Action string   `json:"action"`
+		Paths  []string `json:"paths"`
+	}
+	if err := decode(c, &form); err != nil {
+		a.respond(c, nil, err)
+		return
+	}
+	value, err := a.app.StorageAction(c.Request.Context(), form.Action, form.Paths)
+	a.respond(c, value, err)
 }
 
 func (a *api) retryDownload(c *gin.Context) {

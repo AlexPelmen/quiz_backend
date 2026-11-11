@@ -89,6 +89,14 @@ func (a *App) readOne(ctx context.Context, resource string, id uuid.UUID) (any, 
 	}
 }
 
+// TrackArtists возвращает исполнителей существующего трека.
+func (a *App) TrackArtists(ctx context.Context, id uuid.UUID) ([]domain.Artist, error) {
+	if _, err := a.uow.Tracks.Get(ctx, id); err != nil {
+		return nil, err
+	}
+	return a.uow.Tracks.Artists(ctx, id)
+}
+
 // Delete удаляет объект каталога или пакет с проверкой ссылочной целостности в БД.
 func (a *App) Delete(ctx context.Context, resource string, id uuid.UUID) error {
 	switch resource {
@@ -156,6 +164,9 @@ func (a *App) SaveArtist(ctx context.Context, id *uuid.UUID, f ArtistForm) (doma
 			}
 		}
 
+		if id == nil && r.Name == "" && r.YTMusicURL != "" {
+			r.Name = r.YTMusicURL
+		}
 		if err := validateCatalogName(r.Name); err != nil {
 			return err
 		}

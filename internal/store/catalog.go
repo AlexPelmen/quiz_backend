@@ -79,7 +79,18 @@ func (r ArtistRepository) Update(ctx context.Context, a domain.Artist) (domain.A
 // Delete удаляет исполнителя и его каталог в транзакции вызывающего сервиса.
 func (r ArtistRepository) Delete(ctx context.Context, id uuid.UUID) error {
 	for _, sql := range []string{
-		`DELETE FROM tracks t USING artist_to_track owner WHERE owner.track_id=t.id AND owner.artist_id=$1`,
+		`SELECT t.id FROM tracks t JOIN artist_to_track owner ON owner.track_id=t.id
+            WHERE owner.artist_id=$1 ORDER BY t.id FOR UPDATE OF t`,
+		`DELETE FROM tracks t USING artist_to_track owner WHERE owner.track_id=t.id AND owner.artist_id=$1
+            AND NOT EXISTS (SELECT 1 FROM artist_to_track other WHERE other.track_id=t.id AND other.artist_id<>$1)`,
+		`WITH removed AS (
+            DELETE FROM artist_to_track WHERE artist_id=$1 RETURNING track_id,is_primary
+        ), replacement AS (
+            SELECT DISTINCT ON (other.track_id) other.track_id,other.artist_id
+            FROM artist_to_track other JOIN removed USING (track_id)
+            WHERE removed.is_primary AND other.artist_id<>$1 ORDER BY other.track_id,other.artist_id
+        ) UPDATE artist_to_track owner SET is_primary=true FROM replacement r
+          WHERE (owner.track_id,owner.artist_id)=(r.track_id,r.artist_id)`,
 		"DELETE FROM albums WHERE id IN (SELECT album_id FROM artist_to_album WHERE artist_id=$1)",
 	} {
 		if _, err := r.db.Exec(ctx, sql, id); err != nil {
@@ -301,6 +312,13 @@ func (r AlbumRepository) Delete(ctx context.Context, id uuid.UUID) error {
 
 // TrackRepository управляет треками и их связями.
 type TrackRepository struct{ db DB }
+
+// Artists возвращает всех исполнителей трека, начиная с основного.
+func (r TrackRepository) Artists(ctx context.Context, id uuid.UUID) ([]domain.Artist, error) {
+	return query[domain.Artist](ctx, r.db, `SELECT a.* FROM catalog_artists a
+        JOIN artist_to_track owner ON owner.artist_id=a.id WHERE owner.track_id=$1
+        ORDER BY owner.is_primary DESC,lower(a.name),a.id`, []any{id})
+}
 
 const trackColumns = `id,name,artist_id,album_id,tags,yt_plays,asked,guessed,excluded_from_quiz,
     yt_music_id,music_brainz_id,genius_id,manual_fields,missing_fields,status,duration_seconds,created_at,updated_at`

@@ -201,6 +201,7 @@ type Page struct {
 	AlbumID     *uuid.UUID
 	TrackID     *uuid.UUID
 	AudioStatus string
+	FileType    string
 	Status      string
 	Tag         string
 	Name        string

@@ -113,7 +113,11 @@ func initialHint(name string) string {
 		"Н", "О", "П", "К", "Р", "С", "Т", "У", "В", "В", "Кс", "Й", "З",
 	}
 
-	for _, letter := range norm.NFC.String(withoutArticle(name)) {
+	parts := strings.Fields(name)
+	if len(parts) > 1 && strings.EqualFold(parts[0], "the") {
+		name = strings.Join(parts[1:], " ")
+	}
+	for _, letter := range norm.NFC.String(name) {
 		if !unicode.IsLetter(letter) {
 			continue
 		}
