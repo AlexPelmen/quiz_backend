@@ -96,3 +96,48 @@ func TestDownloadSelection(t *testing.T) {
 
 	call("POST", "/api/v1/downloads/start", fmt.Sprintf(`{"downloader":"image","download_ids":[%q]}`, image), 201)
 }
+
+func TestStartAllWaitingByMediaType(t *testing.T) {
+	pool, uow := testutil.Database(t)
+	ctx := t.Context()
+	seedHTTPTrack(t, pool, 1)
+	var track uuid.UUID
+	if err := pool.QueryRow(ctx, "SELECT id FROM tracks").Scan(&track); err != nil {
+		t.Fatal(err)
+	}
+	_, err := pool.Exec(ctx, `INSERT INTO downloads(id,source_type,source_uri,file_type,status)
+		SELECT gen_random_uuid(),'image','https://example.com/image/' || n,'image','created' FROM generate_series(1,205) AS n`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	audio, failed := uuid.New(), uuid.New()
+	if _, err = uow.Downloads.Create(ctx, domain.Download{ID: audio, SourceType: "unknown", FileType: "mp3", Meta: map[string]any{}}); err != nil {
+		t.Fatal(err)
+	}
+	if err = uow.Downloads.Link(ctx, track, audio); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = pool.Exec(ctx, `INSERT INTO downloads(id,source_type,source_uri,file_type,status) VALUES($1,'image','https://example.com/failed','image','errored')`, failed); err != nil {
+		t.Fatal(err)
+	}
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	call := client(t, httpapi.Router(service.New(uow, logger, ""), logger))
+	var result struct {
+		Queued int `json:"queued"`
+	}
+	decodeResult(t, call("POST", "/api/v1/downloads/start", `{"downloader":"image","all_waiting":true}`, 201), &result)
+	if result.Queued != 205 {
+		t.Fatalf("ожидалось 205 изображений, получено %d", result.Queued)
+	}
+	for _, id := range []uuid.UUID{audio, failed} {
+		d, getErr := uow.Downloads.Get(ctx, id)
+		if getErr != nil || d.Status == "pending" {
+			t.Fatalf("лишнее задание в очереди: %+v %v", d, getErr)
+		}
+	}
+	call("POST", "/api/v1/downloads/start", fmt.Sprintf(`{"downloader":"yt_music","all_waiting":true,"download_ids":[%q]}`, audio), 400)
+	decodeResult(t, call("POST", "/api/v1/downloads/start", `{"downloader":"yt_music","all_waiting":true}`, 201), &result)
+	if result.Queued != 1 {
+		t.Fatalf("ожидалась одна аудиозапись, получено %d", result.Queued)
+	}
+}

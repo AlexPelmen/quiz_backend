@@ -51,6 +51,12 @@ func (r AlbumRepository) SaveShortlist(ctx context.Context, artist uuid.UUID, al
         ON CONFLICT(artist_id) DO UPDATE SET album_ids=EXCLUDED.album_ids`, []any{artist, albums})
 }
 
+// SaveShortlist сохраняет подтверждённую подборку популярных треков исполнителя.
+func (r TrackRepository) SaveShortlist(ctx context.Context, artist uuid.UUID, tracks []uuid.UUID) error {
+	return execute(ctx, r.db, `INSERT INTO artist_track_shortlists(artist_id,track_ids) VALUES ($1,$2)
+        ON CONFLICT(artist_id) DO UPDATE SET track_ids=EXCLUDED.track_ids`, []any{artist, tracks})
+}
+
 // AlbumCleanupRow описывает альбом вне подборки и защиту сохранённого квиза.
 type AlbumCleanupRow struct {
 	ID        uuid.UUID `json:"id"`

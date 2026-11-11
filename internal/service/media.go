@@ -179,6 +179,7 @@ func downloadYouTube(ctx context.Context, s domain.Settings, d domain.Download, 
 type StartDownloadsForm struct {
 	Downloader  string      `json:"downloader"`
 	DownloadIDs []uuid.UUID `json:"download_ids"`
+	AllWaiting  bool        `json:"all_waiting"`
 }
 
 // StartDownloads запускает только выбранные задания одного загрузчика.
@@ -187,6 +188,12 @@ func (a *App) StartDownloads(ctx context.Context, f StartDownloadsForm) (int64, 
 	case "yt_music", "hitmo", "genius_youtube", "genius_short", "image":
 	default:
 		return 0, fmt.Errorf("%w: неизвестный загрузчик", domain.ErrInvalid)
+	}
+	if f.AllWaiting {
+		if len(f.DownloadIDs) != 0 {
+			return 0, fmt.Errorf("%w: выберите задания или всю очередь ожидания", domain.ErrInvalid)
+		}
+		return a.uow.Downloads.StartAllWaiting(ctx, f.Downloader)
 	}
 
 	if len(f.DownloadIDs) == 0 || len(f.DownloadIDs) > 200 {

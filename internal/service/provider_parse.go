@@ -18,20 +18,22 @@ import (
 )
 
 type providerParser struct {
-	app           *App
-	run           domain.ParseRun
-	settings      domain.Settings
-	artist        domain.Artist
-	genius        *source.Genius
-	mb            *source.MusicBrainz
-	albums        []domain.Album
-	tracks        []domain.TrackWithStatus
-	lists         []string
-	issues        []string
-	failureKind   string
-	failureCount  int
-	affected      map[uuid.UUID]bool
-	nextYTRequest time.Time
+	app              *App
+	run              domain.ParseRun
+	settings         domain.Settings
+	artist           domain.Artist
+	genius           *source.Genius
+	mb               *source.MusicBrainz
+	albums           []domain.Album
+	tracks           []domain.TrackWithStatus
+	rankedTracks     bool
+	rankedCandidates []source.Song
+	lists            []string
+	issues           []string
+	failureKind      string
+	failureCount     int
+	affected         map[uuid.UUID]bool
+	nextYTRequest    time.Time
 }
 
 var errProviderStopped = errors.New("провайдер остановлен из-за серии сбоев")

@@ -18,7 +18,9 @@ func (r ArtistRepository) ClaimProvider(ctx context.Context, seconds int, starte
             WHERE threshold<=a.yt_subs) AS album_limit
         WHERE (a.status='processing' AND a.lease_until<now()) OR (a.updated_at <= $2 AND (
             a.status IN ('created','error','errored') OR
-            (a.status IN ('partial','parsed') AND (c.status IN ('partial','manual') OR EXISTS (
+            (a.status IN ('partial','parsed') AND (($3='yt_music' AND a.yt_music_id IS NOT NULL AND NOT EXISTS (
+                SELECT 1 FROM artist_provider_lists WHERE artist_id=a.id AND provider='yt_music' AND kind='tracks_ranked_20'
+            )) OR c.status IN ('partial','manual') OR EXISTS (
                 SELECT 1 FROM catalog_albums al WHERE al.artist_id=a.id AND cardinality(al.missing_fields)>0
             ) OR EXISTS (
                 SELECT 1 FROM catalog_tracks t WHERE t.artist_id=a.id AND cardinality(t.missing_fields)>0
@@ -59,6 +61,13 @@ func (r ArtistRepository) FinishProvider(ctx context.Context, id uuid.UUID, mess
         WHEN EXISTS (SELECT 1 FROM catalog_artists WHERE id=$1 AND cardinality(missing_fields)>0)
         THEN 'partial' ELSE 'parsed' END,
         error=$2,lease_until=NULL,updated_at=now() WHERE id=$1 AND status='processing'`, []any{id, message})
+}
+
+// ResetTrackRanking разрешает повторно собрать подборку YouTube Music.
+func (r ArtistRepository) ResetTrackRanking(ctx context.Context, id uuid.UUID) error {
+	_, err := r.db.Exec(ctx, `DELETE FROM artist_provider_lists
+        WHERE artist_id=$1 AND provider='yt_music' AND kind='tracks_ranked_20'`, id)
+	return translate(err)
 }
 
 // ProviderLists читает списки, которые провайдер уже вернул без ошибки.

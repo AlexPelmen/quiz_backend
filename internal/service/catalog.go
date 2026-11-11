@@ -562,5 +562,10 @@ func (a *App) StopParsing(ctx context.Context, id uuid.UUID) (domain.ParseRun, e
 
 // RetryArtist разрешает повторную обработку при следующем запуске парсинга.
 func (a *App) RetryArtist(ctx context.Context, id uuid.UUID) error {
-	return a.uow.Artists.Retry(ctx, id)
+	return a.uow.Transaction(ctx, func(tx *store.UnitOfWork) error {
+		if err := tx.Artists.Retry(ctx, id); err != nil {
+			return err
+		}
+		return tx.Artists.ResetTrackRanking(ctx, id)
+	})
 }

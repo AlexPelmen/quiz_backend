@@ -3630,8 +3630,7 @@
                 "type": "object",
                 "additionalProperties": false,
                 "required": [
-                  "downloader",
-                  "download_ids"
+                  "downloader"
                 ],
                 "properties": {
                   "downloader": {
@@ -3653,6 +3652,10 @@
                       "type": "string",
                       "format": "uuid"
                     }
+                  },
+                  "all_waiting": {
+                    "type": "boolean",
+                    "description": "Запустить все совместимые задания в состоянии created; нельзя сочетать с download_ids."
                   }
                 }
               }

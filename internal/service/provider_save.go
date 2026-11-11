@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"fmt"
 	"slices"
 
 	"github.com/google/uuid"
@@ -24,6 +25,40 @@ func (p *providerParser) save(ctx context.Context, c source.Catalog, mb source.E
 		}
 		for _, track := range c.Tracks {
 			if err := p.saveTrack(ctx, tx, track); err != nil {
+				return err
+			}
+		}
+		if p.rankedTracks {
+			for _, song := range p.rankedCandidates {
+				if song.YTMusicID == nil || song.YtPlays == nil {
+					continue
+				}
+				index := slices.IndexFunc(p.tracks, func(t domain.TrackWithStatus) bool {
+					return t.YTMusicID != nil && *t.YTMusicID == *song.YTMusicID
+				})
+				if index < 0 {
+					continue
+				}
+				if err := tx.Tracks.RefreshYTPlays(ctx, p.tracks[index].ID, *song.YtPlays); err != nil {
+					return err
+				}
+				if !slices.Contains(p.tracks[index].ManualFields, "yt_plays") {
+					p.tracks[index].YtPlays = song.YtPlays
+				}
+			}
+		}
+		if p.rankedTracks && len(c.Tracks) > 0 {
+			var ids []uuid.UUID
+			for _, song := range c.Tracks {
+				index := slices.IndexFunc(p.tracks, func(t domain.TrackWithStatus) bool {
+					return t.YTMusicID != nil && song.YTMusicID != nil && *t.YTMusicID == *song.YTMusicID
+				})
+				if index < 0 || slices.Contains(ids, p.tracks[index].ID) {
+					return fmt.Errorf("не удалось сохранить подборку популярных треков")
+				}
+				ids = append(ids, p.tracks[index].ID)
+			}
+			if err := tx.Tracks.SaveShortlist(ctx, p.artist.ID, ids); err != nil {
 				return err
 			}
 		}
@@ -168,7 +203,7 @@ func (p *providerParser) saveTrack(ctx context.Context, tx *store.UnitOfWork, so
 	var old domain.Track
 	if index >= 0 {
 		old = p.tracks[index].Track
-	} else if song.Title == "" || len(p.tracks) >= ParseTrackLimit(p.artist.YtSubs) {
+	} else if song.Title == "" || (!p.rankedTracks && len(p.tracks) >= ParseTrackLimit(p.artist.YtSubs)) {
 		return nil
 	}
 	data := domain.Track{ID: uuid.New(), ArtistID: p.artist.ID, Name: firstKnown(old.Name, song.Title),
@@ -182,6 +217,15 @@ func (p *providerParser) saveTrack(ctx context.Context, tx *store.UnitOfWork, so
 	saved, previous, err := tx.Tracks.Fill(ctx, data)
 	if err != nil {
 		return err
+	}
+	if p.rankedTracks && song.YtPlays != nil && saved.YTMusicID != nil && song.YTMusicID != nil && *saved.YTMusicID == *song.YTMusicID {
+		if err = tx.Tracks.RefreshYTPlays(ctx, saved.ID, *song.YtPlays); err != nil {
+			return err
+		}
+		saved, err = tx.Tracks.Get(ctx, saved.ID)
+		if err != nil {
+			return err
+		}
 	}
 	if err := prepareAudio(ctx, tx, saved, p.artist.Name); err != nil {
 		return err

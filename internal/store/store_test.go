@@ -137,9 +137,9 @@ func TestTrackImportReusesRecordingAcrossArtists(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	saved, err := uow.Tracks.Get(ctx, recording)
-	if err != nil || saved.ArtistID != artists[1] {
-		t.Fatalf("совместная запись после удаления основного исполнителя: %+v, %v", saved, err)
+	remaining, err := uow.Tracks.List(ctx, domain.Page{ArtistID: &artists[1], Limit: 10})
+	if err != nil || len(remaining) != 0 {
+		t.Fatalf("совместная запись должна быть удалена: %+v, %v", remaining, err)
 	}
 }
 
@@ -294,6 +294,44 @@ func TestWeightedSelection(t *testing.T) {
 
 	for _, table := range []string{"artists", "tracks"} {
 		t.Run(table, func(t *testing.T) { assertZeroExcludes(t, pool, uow, table) })
+	}
+}
+
+func TestTrackShortlistControlsQuizSelection(t *testing.T) {
+	pool, uow := testutil.Database(t)
+	ctx := t.Context()
+	artist := seedCandidate(t, pool, 1)
+	var oldTrack, audio uuid.UUID
+	if err := pool.QueryRow(ctx, `SELECT td.track_id,td.download_id FROM track_to_download td
+		JOIN artist_to_track owner ON owner.track_id=td.track_id WHERE owner.artist_id=$1`, artist).Scan(&oldTrack, &audio); err != nil {
+		t.Fatal(err)
+	}
+	newTrack := uuid.New()
+	if _, err := uow.Tracks.Create(ctx, domain.Track{ID: newTrack, ArtistID: artist, Name: "Популярный"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := uow.Tracks.SaveShortlist(ctx, artist, []uuid.UUID{newTrack}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := uow.Packs.Pick(ctx, []uuid.UUID{}, store.PickFilter{Kind: "artist_by_track"}); !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("старый трек не должен заменять незагруженный выбранный: %v", err)
+	}
+	if err := uow.Downloads.Link(ctx, newTrack, audio); err != nil {
+		t.Fatal(err)
+	}
+	candidate, err := uow.Packs.Pick(ctx, []uuid.UUID{}, store.PickFilter{Kind: "artist_by_track"})
+	if err != nil || candidate.Track.ID != newTrack {
+		t.Fatalf("выбран неверный трек: %+v %v", candidate.Track, err)
+	}
+	if _, err = uow.Tracks.Get(ctx, oldTrack); err != nil {
+		t.Fatalf("старый трек удалён: %v", err)
+	}
+	if err = uow.Tracks.Delete(ctx, newTrack); err != nil {
+		t.Fatal(err)
+	}
+	candidate, err = uow.Packs.Pick(ctx, []uuid.UUID{}, store.PickFilter{Kind: "artist_by_track"})
+	if err != nil || candidate.Track.ID != oldTrack {
+		t.Fatalf("подборка не очищена после удаления трека: %+v %v", candidate.Track, err)
 	}
 }
 

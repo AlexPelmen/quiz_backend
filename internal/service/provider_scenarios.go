@@ -31,7 +31,7 @@ func (p *providerParser) needsYTAlbums() bool {
 
 func (p *providerParser) youtube(ctx context.Context) error {
 	needTracks := p.needsList("tracks", len(p.tracks), ParseTrackLimit(p.artist.YtSubs))
-	var selected *source.Catalog
+	needRanked := !slices.Contains(p.lists, "tracks_ranked_20")
 	if p.artist.YTMusicID == nil {
 		label, operation, key := "Поиск ID исполнителя", "search_artist", ""
 		if p.artist.YTMusicURL != "" {
@@ -42,15 +42,7 @@ func (p *providerParser) youtube(ctx context.Context) error {
 			return err
 		}
 		if ok {
-			if len(data.ArtistCandidates) > 1 {
-				selected, err = p.selectYTArtist(ctx, data.ArtistCandidates)
-				if err != nil {
-					return err
-				}
-				if selected != nil {
-					data.YTMusicID = selected.YTMusicID
-				}
-			} else if data.YTMusicID == nil {
+			if data.YTMusicID == nil {
 				p.event(ctx, "Поиск ID исполнителя", "Нет совпадений по названию")
 			}
 			if data.YTMusicID != nil {
@@ -60,9 +52,9 @@ func (p *providerParser) youtube(ctx context.Context) error {
 			}
 		}
 	}
-	if p.artist.YTMusicID != nil && (selected != nil || p.needsYTAlbums() || needTracks || p.artist.YtSubs == nil ||
+	if p.artist.YTMusicID != nil && (p.needsYTAlbums() || needTracks || needRanked || p.artist.YtSubs == nil ||
 		p.artist.YtPlays == nil || p.artist.FullName == "" || slices.Contains(p.artist.MissingFields, "logo")) {
-		if err := p.youtubeArtist(ctx, selected); err != nil {
+		if err := p.youtubeArtist(ctx); err != nil {
 			return err
 		}
 	}
@@ -120,53 +112,10 @@ func (p *providerParser) youtube(ctx context.Context) error {
 	return nil
 }
 
-func (p *providerParser) selectYTArtist(ctx context.Context, candidates []string) (*source.Catalog, error) {
-	var selected *source.Catalog
-	bestRank := [2]int64{-1, -1}
-	for _, candidate := range candidates {
-		card, ok, err := p.yt(ctx, "Карточка кандидата · "+candidate, "artist", candidate, p.artist.ID)
-		if err != nil || !ok {
-			return nil, err
-		}
-		if card.ArtistUnavailable {
-			p.event(ctx, "Карточка кандидата · "+candidate, "Пропущена: YouTube Music не вернул музыкальную карточку")
-			continue
-		}
-		rank := ytArtistPopularity(card)
-		if slices.Compare(rank[:], bestRank[:]) > 0 {
-			card.YTMusicID = &candidate
-			selected, bestRank = &card, rank
-		}
-	}
-	if selected == nil {
-		p.event(ctx, "Поиск ID исполнителя", "У одноимённых исполнителей нет данных о популярности")
-	} else {
-		p.event(ctx, "Поиск ID исполнителя", "Выбрана самая популярная карточка · "+*selected.YTMusicID)
-	}
-	return selected, nil
-}
-
-func ytArtistPopularity(card source.Catalog) [2]int64 {
-	rank := [2]int64{-1, -1}
-	for i, metric := range [...]*int64{card.YtSubs, card.YtPlays} {
-		if metric != nil {
-			rank[i] = *metric
-		}
-	}
-	return rank
-}
-
-func (p *providerParser) youtubeArtist(ctx context.Context, selected *source.Catalog) error {
-	var data source.Catalog
-	var err error
-	if selected != nil {
-		data = *selected
-	} else {
-		var ok bool
-		data, ok, err = p.yt(ctx, "Карточка исполнителя", "artist", "", p.artist.ID)
-		if err != nil || !ok {
-			return err
-		}
+func (p *providerParser) youtubeArtist(ctx context.Context) error {
+	data, ok, err := p.yt(ctx, "Карточка исполнителя", "artist", "", p.artist.ID)
+	if err != nil || !ok {
+		return err
 	}
 	albums, tracks := data.Albums, data.Tracks
 	data.Albums = nil
@@ -191,7 +140,7 @@ func (p *providerParser) youtubeArtist(ctx context.Context, selected *source.Cat
 				rankedAlbums = true
 			}
 			if queryErr != nil {
-				return errors.Join(queryErr, p.save(ctx, source.Catalog{Albums: albums, Tracks: tracks}, source.Enrichment{}))
+				return errors.Join(queryErr, p.save(ctx, source.Catalog{Albums: albums}, source.Enrichment{}))
 			}
 			albumsComplete = ok
 		}
@@ -221,18 +170,39 @@ func (p *providerParser) youtubeArtist(ctx context.Context, selected *source.Cat
 			return err
 		}
 	}
-	if err = p.save(ctx, source.Catalog{Tracks: tracks}, source.Enrichment{}); err != nil {
-		return err
-	}
-	if p.needsList("tracks", len(p.tracks), ParseTrackLimit(p.artist.YtSubs)) {
+	if !slices.Contains(p.lists, "tracks_ranked_20") {
 		if data.TopSongsPlaylist != "" {
-			playlist, ok, err := p.yt(ctx, "Популярные треки", "playlist", data.TopSongsPlaylist, p.artist.ID)
-			if err != nil || !ok {
-				return err
+			playlist, ok, queryErr := p.yt(ctx, "Популярные треки", "playlist", data.TopSongsPlaylist, p.artist.ID)
+			if queryErr != nil || !ok {
+				return queryErr
 			}
-			return p.save(ctx, playlist, source.Enrichment{}, "tracks")
+			tracks = playlist.Tracks
+		} else {
+			if slices.ContainsFunc(tracks, func(track source.Song) bool { return track.YtPlays == nil }) {
+				p.issues = append(p.issues, "Популярные треки: прослушивания недоступны")
+				return nil
+			}
+			slices.SortStableFunc(tracks, func(a, b source.Song) int {
+				if *a.YtPlays > *b.YtPlays {
+					return -1
+				}
+				if *a.YtPlays < *b.YtPlays {
+					return 1
+				}
+				return 0
+			})
 		}
-		return p.save(ctx, source.Catalog{}, source.Enrichment{}, "tracks")
+		if len(tracks) == 0 {
+			p.event(ctx, "Популярные треки", "YouTube Music не вернул треки для отбора")
+			return p.save(ctx, source.Catalog{}, source.Enrichment{}, "tracks", "tracks_ranked_20")
+		}
+		p.rankedCandidates = tracks
+		tracks = tracks[:min(len(tracks), ParseTrackLimit(p.artist.YtSubs))]
+		p.rankedTracks = true
+		err = p.save(ctx, source.Catalog{Tracks: tracks}, source.Enrichment{}, "tracks", "tracks_ranked_20")
+		p.rankedTracks = false
+		p.rankedCandidates = nil
+		return err
 	}
 	return nil
 }

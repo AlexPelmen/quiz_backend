@@ -12,8 +12,80 @@ import (
 	"github.com/google/uuid"
 
 	"devkeeper.com/quiz/internal/domain"
+	"devkeeper.com/quiz/internal/source"
 	"devkeeper.com/quiz/internal/testutil"
 )
+
+func TestRankedTracksPreserveExistingAndManualCounts(t *testing.T) {
+	pool, uow := testutil.Database(t)
+	ctx := t.Context()
+	app := New(uow, slog.New(slog.NewTextHandler(io.Discard, nil)), "")
+	artistID := uuid.New()
+	subs, oldPlays, manualPlays := int64(270000), int64(2), int64(123)
+	artist, err := uow.Artists.Create(ctx, domain.Artist{ID: artistID, Name: "Turnstile", YtSubs: &subs})
+	if err != nil {
+		t.Fatal(err)
+	}
+	oldID, otherID, newID := "old", "other", "new"
+	for _, track := range []domain.Track{
+		{ID: uuid.New(), ArtistID: artistID, Name: "Old", YTMusicID: &oldID, YtPlays: &oldPlays, ManualFields: []string{"yt_plays"}},
+		{ID: uuid.New(), ArtistID: artistID, Name: "Other", YTMusicID: &otherID, YtPlays: &oldPlays},
+	} {
+		if _, err = uow.Tracks.Create(ctx, track); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err = pool.Exec(ctx, "UPDATE artists SET status='processing' WHERE id=$1", artistID); err != nil {
+		t.Fatal(err)
+	}
+	run, err := app.StartProviderParsing(ctx, "yt_music")
+	if err != nil {
+		t.Fatal(err)
+	}
+	otherUpdated := int64(9900000)
+	p := providerParser{app: app, artist: artist, run: run, rankedTracks: true,
+		rankedCandidates: []source.Song{{YTMusicID: &otherID, YtPlays: &otherUpdated}}}
+	if err = p.loadRows(ctx); err != nil {
+		t.Fatal(err)
+	}
+	plays := int64(11000000)
+	if err = p.save(ctx, source.Catalog{Tracks: []source.Song{
+		{Title: "New", YTMusicID: &newID, YtPlays: &plays},
+		{Title: "Old", YTMusicID: &oldID, YtPlays: &manualPlays},
+	}}, source.Enrichment{}, "tracks_ranked_20"); err != nil {
+		t.Fatal(err)
+	}
+	var count int
+	var ids []uuid.UUID
+	if err = pool.QueryRow(ctx, `SELECT (SELECT count(*) FROM artist_to_track WHERE artist_id=$1),
+		(SELECT track_ids FROM artist_track_shortlists WHERE artist_id=$1)`, artistID).Scan(&count, &ids); err != nil {
+		t.Fatal(err)
+	}
+	if count != 3 || len(ids) != 2 {
+		t.Fatalf("старые треки или подборка потеряны: count=%d ids=%v", count, ids)
+	}
+	var savedManual int64
+	if err = pool.QueryRow(ctx, "SELECT yt_plays FROM tracks WHERE yt_music_id=$1", oldID).Scan(&savedManual); err != nil || savedManual != oldPlays {
+		t.Fatalf("ручной счётчик изменён: %d, %v", savedManual, err)
+	}
+	var refreshed int64
+	if err = pool.QueryRow(ctx, "SELECT yt_plays FROM tracks WHERE yt_music_id=$1", otherID).Scan(&refreshed); err != nil || refreshed != otherUpdated {
+		t.Fatalf("счётчик ранее сохранённого трека не обновлён: %d, %v", refreshed, err)
+	}
+	if _, err = pool.Exec(ctx, "UPDATE artists SET status='partial' WHERE id=$1", artistID); err != nil {
+		t.Fatal(err)
+	}
+	if err = app.RetryArtist(ctx, artistID); err != nil {
+		t.Fatal(err)
+	}
+	var marker bool
+	if err = pool.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM artist_provider_lists WHERE artist_id=$1 AND kind='tracks_ranked_20')`, artistID).Scan(&marker); err != nil || marker {
+		t.Fatalf("повторная проверка подборки не разрешена: %v, %v", marker, err)
+	}
+	if err = pool.QueryRow(ctx, "SELECT track_ids FROM artist_track_shortlists WHERE artist_id=$1", artistID).Scan(&ids); err != nil || len(ids) != 2 {
+		t.Fatalf("действующая подборка потеряна до повторного импорта: %v, %v", ids, err)
+	}
+}
 
 func TestProviderKeepsArtistIDAfterCardFailure(t *testing.T) {
 	pool, uow := testutil.Database(t)

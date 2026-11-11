@@ -79,18 +79,7 @@ func (r ArtistRepository) Update(ctx context.Context, a domain.Artist) (domain.A
 // Delete удаляет исполнителя и его каталог в транзакции вызывающего сервиса.
 func (r ArtistRepository) Delete(ctx context.Context, id uuid.UUID) error {
 	for _, sql := range []string{
-		`SELECT t.id FROM tracks t JOIN artist_to_track owner ON owner.track_id=t.id
-            WHERE owner.artist_id=$1 ORDER BY t.id FOR UPDATE OF t`,
-		`DELETE FROM tracks t USING artist_to_track owner WHERE owner.track_id=t.id AND owner.artist_id=$1
-            AND NOT EXISTS (SELECT 1 FROM artist_to_track other WHERE other.track_id=t.id AND other.artist_id<>$1)`,
-		`WITH removed AS (
-            DELETE FROM artist_to_track WHERE artist_id=$1 RETURNING track_id,is_primary
-        ), replacement AS (
-            SELECT DISTINCT ON (other.track_id) other.track_id,other.artist_id
-            FROM artist_to_track other JOIN removed USING (track_id)
-            WHERE removed.is_primary AND other.artist_id<>$1 ORDER BY other.track_id,other.artist_id
-        ) UPDATE artist_to_track owner SET is_primary=true FROM replacement r
-          WHERE (owner.track_id,owner.artist_id)=(r.track_id,r.artist_id)`,
+		`DELETE FROM tracks t USING artist_to_track owner WHERE owner.track_id=t.id AND owner.artist_id=$1`,
 		"DELETE FROM albums WHERE id IN (SELECT album_id FROM artist_to_album WHERE artist_id=$1)",
 	} {
 		if _, err := r.db.Exec(ctx, sql, id); err != nil {
@@ -360,6 +349,12 @@ func (r TrackRepository) Create(ctx context.Context, t domain.Track) (domain.Tra
 	}
 
 	return r.Get(ctx, t.ID)
+}
+
+// RefreshYTPlays обновляет счётчик источника, сохраняя ручное значение.
+func (r TrackRepository) RefreshYTPlays(ctx context.Context, id uuid.UUID, plays int64) error {
+	return execute(ctx, r.db, `UPDATE tracks SET yt_plays=CASE WHEN 'yt_plays'=ANY(manual_fields) THEN yt_plays ELSE $2 END,
+		updated_at=now() WHERE id=$1`, []any{id, plays})
 }
 
 // Update сохраняет ручные поля трека.

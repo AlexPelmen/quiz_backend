@@ -185,6 +185,21 @@ func (r DownloadRepository) Start(ctx context.Context, downloader string, ids []
 	return result.RowsAffected(), nil
 }
 
+// StartAllWaiting ставит в очередь все ожидающие задания выбранного типа.
+func (r DownloadRepository) StartAllWaiting(ctx context.Context, downloader string) (int64, error) {
+	result, err := r.db.Exec(ctx, `WITH ready AS (
+        SELECT id FROM downloads WHERE status='created'
+        AND CASE WHEN $1='image' THEN source_type='image' AND source_uri<>''
+            ELSE file_type='mp3' AND EXISTS(SELECT 1 FROM track_to_download WHERE download_id=downloads.id) END
+        ORDER BY id FOR UPDATE
+    ) UPDATE downloads SET status='pending',downloader=$1,preview=false,attempts=0,error='',
+        next_attempt_at=now(),lease_until=NULL,updated_at=now() WHERE id IN (SELECT id FROM ready)`, downloader)
+	if err != nil {
+		return 0, translate(err)
+	}
+	return result.RowsAffected(), nil
+}
+
 // TrackIDs возвращает треки, связанные с задачей.
 func (r DownloadRepository) TrackIDs(ctx context.Context, id uuid.UUID) ([]uuid.UUID, error) {
 	rows, err := query[struct{ TrackID uuid.UUID }](ctx, r.db,

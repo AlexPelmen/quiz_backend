@@ -9,6 +9,10 @@ import (
 	"slices"
 	"strings"
 	"time"
+	"unicode"
+
+	"golang.org/x/text/cases"
+	"golang.org/x/text/unicode/norm"
 
 	"devkeeper.com/quiz/internal/domain"
 )
@@ -47,7 +51,7 @@ type mbArtist struct {
 	} `json:"relations"`
 }
 
-// Enrich выбирает только единственное точное совпадение имени; неоднозначность не маскируется.
+// Enrich ищет исполнителя и загружает его сведения.
 func (m *MusicBrainz) Enrich(ctx context.Context, name string) (Enrichment, error) {
 	id, err := m.FindArtist(ctx, name)
 	if err != nil {
@@ -59,32 +63,85 @@ func (m *MusicBrainz) Enrich(ctx context.Context, name string) (Enrichment, erro
 	return m.EnrichByID(ctx, id)
 }
 
-// FindArtist ищет ID одним запросом и возвращает пустой ID при отсутствии однозначного совпадения.
+func musicBrainzName(name string) string {
+	return strings.Join(strings.Fields(cases.Fold().String(norm.NFKC.String(name))), " ")
+}
+
+func musicBrainzPlain(name string) string {
+	var out strings.Builder
+	latin := false
+	for _, r := range norm.NFD.String(musicBrainzName(name)) {
+		if unicode.IsMark(r) {
+			if latin {
+				continue
+			}
+		} else {
+			latin = unicode.In(r, unicode.Latin)
+		}
+		out.WriteRune(r)
+	}
+	return norm.NFC.String(out.String())
+}
+
+func musicBrainzKey(name string, transliterate bool) string {
+	name = strings.ReplaceAll(musicBrainzPlain(name), "&", "and")
+	if transliterate {
+		name = domain.TransliterateRussian(name)
+	}
+	return strings.Map(func(r rune) rune {
+		if unicode.IsLetter(r) || unicode.IsNumber(r) {
+			return r
+		}
+		return -1
+	}, name)
+}
+
+func musicBrainzMatchRank(name, query string) int {
+	switch {
+	case musicBrainzName(name) == musicBrainzName(query):
+		return 0
+	case musicBrainzPlain(name) == musicBrainzPlain(query):
+		return 1
+	case musicBrainzKey(name, false) != "" && musicBrainzKey(name, false) == musicBrainzKey(query, false):
+		return 2
+	case musicBrainzKey(name, true) != "" && musicBrainzKey(name, true) == musicBrainzKey(query, true):
+		return 3
+	default:
+		return 4
+	}
+}
+
+// FindArtist выбирает совпадение по имени и порядку результатов MusicBrainz.
 func (m *MusicBrainz) FindArtist(ctx context.Context, name string) (string, error) {
-	var result struct {
-		Artists []mbArtist `json:"artists"`
-	}
-	// Экранирование специальных символов Lucene сохраняет имя как буквальный поисковый запрос.
 	replacer := strings.NewReplacer(`\`, `\\`, `"`, `\"`)
-
-	path := "/artist?fmt=json&limit=100&query=" + url.QueryEscape(`artist:"`+replacer.Replace(name)+`"`)
-	if err := m.api.get(ctx, path, &result); err != nil {
-		return "", err
-	}
-
-	matches := []mbArtist{}
-
-	for _, a := range result.Artists {
-		if strings.EqualFold(strings.TrimSpace(a.Name), strings.TrimSpace(name)) {
-			matches = append(matches, a)
+	queries := []string{name, musicBrainzKey(name, false), musicBrainzKey(name, true)}
+	var searched []string
+	for _, query := range queries {
+		if query == "" || slices.Contains(searched, query) {
+			continue
+		}
+		searched = append(searched, query)
+		var result struct {
+			Artists []mbArtist `json:"artists"`
+		}
+		path := "/artist?fmt=json&limit=100&query=" + url.QueryEscape(`artist:"`+replacer.Replace(query)+`"`)
+		if err := m.api.get(ctx, path, &result); err != nil {
+			return "", err
+		}
+		best, rank := "", 4
+		for _, artist := range result.Artists {
+			if artist.ID == "" {
+				continue
+			}
+			if candidateRank := musicBrainzMatchRank(artist.Name, name); candidateRank < rank {
+				best, rank = artist.ID, candidateRank
+			}
+		}
+		if best != "" {
+			return best, nil
 		}
 	}
-
-	if len(matches) != 1 {
-		return "", nil
-	}
-
-	return matches[0].ID, nil
+	return "", nil
 }
 
 // EnrichByID использует ранее сопоставленного исполнителя.

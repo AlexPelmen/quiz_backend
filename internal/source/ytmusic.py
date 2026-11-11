@@ -24,48 +24,6 @@ def normalized(text):
     return " ".join(unicodedata.normalize("NFKC", text).casefold().split())
 
 
-def without_latin_accents(text):
-    result = []
-    latin = False
-    for char in unicodedata.normalize("NFD", normalized(text)):
-        if unicodedata.category(char).startswith("M"):
-            if latin:
-                continue
-        else:
-            latin = unicodedata.name(char, "").startswith("LATIN ")
-        result.append(char)
-    return unicodedata.normalize("NFC", "".join(result))
-
-
-def artist_key(text, transliterate=False):
-    text = without_latin_accents(text).replace("&", "and")
-    if transliterate:
-        letters = dict(zip("абвгдеёжзийклмнопрстуфхцчшщъыьэюя", (
-            "a", "b", "v", "g", "d", "e", "e", "zh", "z", "i", "y", "k", "l", "m", "n", "o", "p", "r",
-            "s", "t", "u", "f", "kh", "ts", "ch", "sh", "shch", "", "y", "", "e", "yu", "ya")))
-        text = "".join(letters.get(char, char) for char in text)
-    return "".join(char for char in text if char.isalnum())
-
-
-def artist_candidates(rows, name):
-    exact, aliases, compact, transliterated = [], [], [], []
-    query, alias = normalized(name), without_latin_accents(name)
-    key, latin_key = artist_key(name), artist_key(name, transliterate=True)
-    for row in rows:
-        artist, artist_id = row.get("artist") or "", row.get("browseId")
-        if not artist_id:
-            continue
-        if normalized(artist) == query:
-            exact.append(artist_id)
-        elif without_latin_accents(artist) == alias:
-            aliases.append(artist_id)
-        elif key and artist_key(artist) == key:
-            compact.append(artist_id)
-        elif latin_key and artist_key(artist, transliterate=True) == latin_key:
-            transliterated.append(artist_id)
-    return list(dict.fromkeys(exact or aliases or compact or transliterated))
-
-
 def count(value):
     if value is None:
         return None
@@ -80,22 +38,10 @@ def count(value):
 
 def monthly_listeners(artist):
     monthly = count(artist.get("monthlyListeners"))
-    return monthly if monthly is not None else count(artist.get("monthlyListenerCount"))
-
-
-def artist_popularity(artist):
-    return tuple(-1 if metric is None else metric
-                 for metric in (count(artist.get("subscribers")), monthly_listeners(artist)))
-
-
-def candidate_artist(yt, artist_id):
-    try:
-        return yt.get_artist(artist_id)
-    except KeyError as exc:
-        message = str(exc)
-        if "Unable to find 'twoColumnBrowseResultsRenderer'" in message and "singleColumnBrowseResultsRenderer" in message:
-            return None
-        raise
+    if monthly is None:
+        monthly = count(artist.get("monthlyListenerCount"))
+    subscribers = count(artist.get("subscribers"))
+    return monthly if monthly is not None else (subscribers * 2 if subscribers is not None and subscribers <= (2**63 - 1) // 2 else None)
 
 
 def thumbnail(row):
@@ -238,21 +184,10 @@ def load_catalog(yt, lookup):
     artist_id = lookup.get("artist_id")
     artist = None
     if not artist_id:
-        matches = artist_candidates(retry(yt.search, name, filter="artists"), name)
-        if not matches:
+        rows = retry(yt.search, name, filter="artists")
+        if not rows or not rows[0].get("browseId"):
             raise ValueError("artist not found")
-        artist_id = matches[0]
-        if len(matches) > 1:
-            cards = []
-            for candidate in matches:
-                card = retry(candidate_artist, yt, candidate)
-                if card is not None:
-                    cards.append((candidate, card))
-            if not cards:
-                raise ValueError("artist candidate cards unavailable")
-            artist_id, artist = max(cards, key=lambda item: artist_popularity(item[1]))
-            if artist_popularity(artist) == (-1, -1):
-                raise ValueError("artist popularity unavailable")
+        artist_id = rows[0]["browseId"]
     if artist is None:
         artist = retry(yt.get_artist, artist_id)
     subs = count(artist.get("subscribers"))
@@ -332,19 +267,61 @@ def remove_headerless_carousels(value):
             remove_headerless_carousels(item)
 
 
+def playlist_play_counts(value, result):
+    if isinstance(value, list):
+        for item in value:
+            playlist_play_counts(item, result)
+    elif isinstance(value, dict):
+        row = value.get("musicResponsiveListItemRenderer")
+        if isinstance(row, dict):
+            video = (row.get("playlistItemData") or {}).get("videoId")
+            for column in row.get("flexColumns") or []:
+                runs = (column.get("musicResponsiveListItemFlexColumnRenderer") or {}).get("text", {}).get("runs") or []
+                for run in runs:
+                    text = run.get("text") or ""
+                    if video and re.search(r"\bplays?\s*$", text, re.IGNORECASE):
+                        value_count = count(text)
+                        if value_count is not None:
+                            result[video] = value_count
+        for item in value.values():
+            playlist_play_counts(item, result)
+
+
 class MusicClient(YTMusic):
     def get_artist(self, channelId):
+        self._artist_counts = {}
         self._reading_artist = True
         try:
-            return super().get_artist(channelId)
+            artist = super().get_artist(channelId)
         finally:
             self._reading_artist = False
+        for track in (artist.get("songs") or {}).get("results") or []:
+            video = track.get("videoId")
+            if video in self._artist_counts:
+                track["plays"] = self._artist_counts[video]
+        return artist
+
+    def get_playlist(self, playlistId, *args, **kwargs):
+        self._playlist_counts = {}
+        self._reading_playlist = True
+        try:
+            playlist = super().get_playlist(playlistId, *args, **kwargs)
+        finally:
+            self._reading_playlist = False
+        for track in playlist.get("tracks") or []:
+            video = track.get("videoId")
+            if video in self._playlist_counts:
+                track["plays"] = self._playlist_counts[video]
+        return playlist
 
     def _send_request(self, endpoint, body, *args, **kwargs):
         response = super()._send_request(endpoint, body, *args, **kwargs)
         if getattr(self, "_reading_artist", False) and endpoint == "browse":
             # ytmusicapi 1.12.3 expects every artist carousel to have a header.
             remove_headerless_carousels(response)
+            playlist_play_counts(response, self._artist_counts)
+        if getattr(self, "_reading_playlist", False) and endpoint == "browse":
+            playlist_play_counts(response, self._playlist_counts)
         return response
 
 
@@ -400,12 +377,10 @@ def parse_request(yt, lookup):
             raise ValueError("URL does not resolve to an artist")
         return {"yt_music_id": artist_id}
     if operation == "search_artist":
-        matches = artist_candidates(yt.search(name, filter="artists"), name)
-        return {"yt_music_id": matches[0]} if len(matches) == 1 else {"artist_candidates": matches}
+        rows = yt.search(name, filter="artists")
+        return {"yt_music_id": rows[0].get("browseId")} if rows else {}
     if operation == "artist":
-        artist = candidate_artist(yt, key) if key else yt.get_artist(lookup["artist_id"])
-        if artist is None:
-            return {"artist_unavailable": True}
+        artist = yt.get_artist(key or lookup["artist_id"])
         albums, songs = artist.get("albums") or {}, artist.get("songs") or {}
         return {"name": artist.get("name") or name, "logo_url": thumbnail(artist),
                 "yt_subs": count(artist.get("subscribers")),
@@ -418,7 +393,12 @@ def parse_request(yt, lookup):
         browse_id, params = key.split("\n", 1)
         return {"albums": parse_albums(yt.get_artist_albums(browse_id, params, limit=20, order="Popularity"))}
     if operation == "playlist":
-        return {"tracks": parse_songs(yt.get_playlist(key, limit=100).get("tracks") or [])}
+        tracks = parse_songs((yt.get_playlist(key, limit=20).get("tracks") or [])[:20])
+        tracks = list({track["yt_music_id"]: track for track in reversed(tracks)}.values())[::-1]
+        if any(track["yt_plays"] is None for track in tracks):
+            raise ValueError("прослушивания первых 20 треков недоступны")
+        tracks.sort(key=lambda track: track["yt_plays"], reverse=True)
+        return {"tracks": tracks}
     if operation == "album":
         album = yt.get_album(key)
         tracks = parse_songs(album.get("tracks") or [])
@@ -468,6 +448,8 @@ if __name__ == "__main__":
                 kind = type(exc).__name__
                 if lookup.get("operation") == "resolve_artist_url" and isinstance(exc, ValueError):
                     kind = "ссылка не ведёт на карточку исполнителя"
+                elif lookup.get("operation") == "playlist" and isinstance(exc, ValueError):
+                    kind = str(exc)
                 result = {"failure": {"kind": kind, "status": status}}
         elif lookup.get("albums"):
             result = load_album_plays(yt, lookup)
