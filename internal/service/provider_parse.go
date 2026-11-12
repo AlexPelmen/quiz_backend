@@ -87,23 +87,33 @@ func (p *providerParser) process(ctx context.Context) error {
 			return err
 		}
 		p.issues = nil
-		p.lists, err = p.app.uow.Artists.ProviderLists(ctx, p.artist.ID, p.run.Provider, domain.AlbumImportLimit(p.artist.YtSubs))
+		artistCtx, cancel := context.WithTimeout(ctx, time.Duration(p.settings.TaskTimeoutSeconds)*time.Second)
+		p.lists, err = p.app.uow.Artists.ProviderLists(artistCtx, p.artist.ID, p.run.Provider, domain.AlbumImportLimit(p.artist.YtSubs))
 		if err == nil {
-			err = p.loadRows(ctx)
+			err = p.loadRows(artistCtx)
 		}
 		if err == nil {
-			p.event(ctx, "Исполнитель", "Начали обработку")
+			p.event(artistCtx, "Исполнитель", "Начали обработку")
 			switch p.run.Provider {
 			case "yt_music":
-				err = p.youtube(ctx)
+				err = p.youtube(artistCtx)
 			case "genius":
-				err = p.parseGenius(ctx)
+				err = p.parseGenius(artistCtx)
 			case "musicbrainz":
-				err = p.parseMusicBrainz(ctx)
+				err = p.parseMusicBrainz(artistCtx)
 			}
 		}
+		timedOut := errors.Is(artistCtx.Err(), context.DeadlineExceeded)
+		cancel()
 		if ctx.Err() != nil {
 			return ctx.Err()
+		}
+		if errors.Is(err, errParsingStopped) {
+			return p.app.uow.Artists.Release(ctx, p.artist.ID)
+		}
+		if timedOut {
+			err = fmt.Errorf("тайм-аут обработки исполнителя (%d с)", p.settings.TaskTimeoutSeconds)
+			p.event(ctx, "Исполнитель", err.Error())
 		}
 		if err != nil && !errors.Is(err, errProviderStopped) {
 			p.issues = append(p.issues, err.Error())
@@ -121,7 +131,7 @@ func (p *providerParser) process(ctx context.Context) error {
 		if finishErr != nil {
 			return finishErr
 		}
-		if err != nil {
+		if err != nil && !timedOut {
 			return err
 		}
 	}
@@ -138,8 +148,12 @@ func (p *providerParser) request(ctx context.Context, label string, id uuid.UUID
 	started := time.Now()
 	var err error
 	for attempt := 0; ; attempt++ {
-		if _, err := p.app.uow.Runs.Renew(ctx, p.run, lease); err != nil {
-			return false, err
+		current, renewErr := p.app.uow.Runs.Renew(ctx, p.run, lease)
+		if renewErr != nil {
+			return false, renewErr
+		}
+		if current.Status == "stopping" {
+			return false, errParsingStopped
 		}
 		if err := p.app.uow.Artists.Renew(ctx, p.artist.ID, lease); err != nil {
 			return false, err

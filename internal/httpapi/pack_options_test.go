@@ -51,7 +51,7 @@ func TestPackRoundOptions(t *testing.T) {
 	for _, kind := range []string{"artist_cities", "artist_growth", "artist_alphabet", "artist_by_albums"} {
 		t.Run(kind, func(t *testing.T) {
 			post := client(t, router)
-			body := fmt.Sprintf(`{"name":"Раунд","difficulty":"hard","round_types":[%q]}`, kind)
+			body := fmt.Sprintf(`{"name":"Раунд","difficulty":"hard","question_count":10,"round_types":[%q]}`, kind)
 
 			var pack domain.QuizPack
 
@@ -118,7 +118,7 @@ func testPackCover(t *testing.T, router http.Handler) {
 	var body bytes.Buffer
 
 	form := multipart.NewWriter(&body)
-	data := `{"name":"С картинкой","difficulty":"easy","round_types":["artist_by_track"]}`
+	data := `{"name":"С картинкой","difficulty":"easy","question_count":10,"round_types":["artist_by_track"]}`
 
 	if err := form.WriteField("pack", data); err != nil {
 		t.Fatal(err)

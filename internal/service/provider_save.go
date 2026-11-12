@@ -206,6 +206,10 @@ func (p *providerParser) saveTrack(ctx context.Context, tx *store.UnitOfWork, so
 	var old domain.Track
 	if index >= 0 {
 		old = p.tracks[index].Track
+	} else if slices.ContainsFunc(p.tracks, func(track domain.TrackWithStatus) bool {
+		return trackTitleKey(song.Title) != "" && trackTitleKey(track.Name) == trackTitleKey(song.Title)
+	}) {
+		return nil
 	} else if song.Title == "" || (!p.rankedTracks && len(p.tracks) >= ParseTrackLimit(p.artist.YtSubs)) {
 		return nil
 	}

@@ -197,6 +197,13 @@ func (p *providerParser) youtubeArtist(ctx context.Context) error {
 			return p.save(ctx, source.Catalog{}, source.Enrichment{}, "tracks", "tracks_ranked_20")
 		}
 		p.rankedCandidates = tracks
+		tracks = uniqueTrackTitles(tracks)
+		tracks = slices.DeleteFunc(tracks, func(song source.Song) bool {
+			return slices.ContainsFunc(p.tracks, func(track domain.TrackWithStatus) bool {
+				return trackTitleKey(song.Title) != "" && trackTitleKey(track.Name) == trackTitleKey(song.Title) &&
+					(track.YTMusicID == nil || song.YTMusicID == nil || *track.YTMusicID != *song.YTMusicID)
+			})
+		})
 		tracks = tracks[:min(len(tracks), ParseTrackLimit(p.artist.YtSubs))]
 		p.rankedTracks = true
 		err = p.save(ctx, source.Catalog{Tracks: tracks}, source.Enrichment{}, "tracks", "tracks_ranked_20")

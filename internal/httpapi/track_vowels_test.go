@@ -29,7 +29,7 @@ func TestTrackVowelsRound(t *testing.T) {
 
 	call("PATCH", "/api/v1/settings", `{"round_types":["track_vowels","track_vowels","track_vowels","track_vowels",
 		"track_vowels","track_vowels","track_vowels","track_vowels","track_vowels","track_vowels"]}`, 200)
-	call("POST", "/api/v1/quiz-packs", `{"name":"Девять подходящих исполнителей"}`, 422)
+	call("POST", "/api/v1/quiz-packs", `{"name":"Девять подходящих исполнителей","question_count":10,"round_types":["track_vowels"]}`, 422)
 
 	// У десятого исполнителя есть и подходящий трек, и трек без согласных с гораздо большим весом.
 	if _, err := pool.Exec(t.Context(), `WITH updated AS (
@@ -48,7 +48,7 @@ func TestTrackVowelsRound(t *testing.T) {
 
 	var pack domain.QuizPack
 
-	decodeResult(t, call("POST", "/api/v1/quiz-packs", `{"name":"Десять исполнителей"}`, 201), &pack)
+	decodeResult(t, call("POST", "/api/v1/quiz-packs", `{"name":"Десять исполнителей","question_count":10,"round_types":["track_vowels"]}`, 201), &pack)
 
 	if len(pack.Rounds) != 1 || len(pack.Rounds[0].Questions) != 10 {
 		t.Fatal("ожидался полный раунд по гласным")

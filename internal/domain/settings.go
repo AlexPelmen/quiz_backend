@@ -40,7 +40,7 @@ func DefaultSettings() Settings {
 		CoverArtArchiveURL: "https://coverartarchive.org",
 		HitmoURL:           "https://rus.hitmos.fm", YTMusicPython: "python3",
 		QuizGuessRateEnabled: true, QuizGuessRateAskedThreshold: 5, PollSeconds: 2, HTTPTimeoutSeconds: 30,
-		TaskTimeoutSeconds: 600, DownloadWorkers: 2, MaxDownloadBytes: 100 << 20,
+		TaskTimeoutSeconds: 180, DownloadWorkers: 2, MaxDownloadBytes: 100 << 20,
 		StorageDir: "data", FFmpeg: "ffmpeg", FFprobe: "ffprobe", YTDLP: "yt-dlp", YTDLPJSRuntime: "node",
 		GeniusURL: "https://api.genius.com", GeniusWebURL: "https://genius.com/api",
 		MusicBrainzURL: "https://musicbrainz.org/ws/2", UserAgent: "MusicQuiz/1.0 (local music quiz service)",

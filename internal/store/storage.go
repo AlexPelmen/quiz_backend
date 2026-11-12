@@ -18,7 +18,7 @@ type StorageCandidate struct {
 // StorageCandidates возвращает объекты, которым можно назначить файл.
 func (r DownloadRepository) StorageCandidates(ctx context.Context) ([]StorageCandidate, error) {
 	return query[StorageCandidate](ctx, r.db, `SELECT a.id,'artists' AS kind,a.name AS artist,'' AS title FROM artists a WHERE a.logo_download_id IS NULL
-        UNION ALL SELECT al.id,'albums',a.name,al.name FROM albums al JOIN artist_to_album own ON own.album_id=al.id JOIN artists a ON a.id=own.artist_id WHERE al.cover_download_id IS NULL
+        UNION ALL SELECT al.id,'albums',a.name,al.name FROM albums al JOIN artist_to_album own ON own.album_id=al.id AND own.is_primary JOIN artists a ON a.id=own.artist_id WHERE al.cover_download_id IS NULL
         UNION ALL SELECT t.id,'tracks',a.name,t.name FROM tracks t JOIN artist_to_track own ON own.track_id=t.id JOIN artists a ON a.id=own.artist_id`, nil)
 }
 
@@ -64,7 +64,7 @@ func (r DownloadRepository) DownloadNames(ctx context.Context, id uuid.UUID) (st
         (SELECT a.name FROM track_to_download td JOIN artist_to_track own ON own.track_id=td.track_id AND own.is_primary
          JOIN artists a ON a.id=own.artist_id WHERE td.download_id=$1 ORDER BY td.track_id LIMIT 1),
         (SELECT a.name FROM artists a WHERE a.logo_download_id=$1 ORDER BY a.id LIMIT 1),
-        (SELECT a.name FROM albums al JOIN artist_to_album own ON own.album_id=al.id JOIN artists a ON a.id=own.artist_id
+        (SELECT a.name FROM albums al JOIN artist_to_album own ON own.album_id=al.id AND own.is_primary JOIN artists a ON a.id=own.artist_id
          WHERE al.cover_download_id=$1 ORDER BY al.id LIMIT 1), ''), COALESCE(
         (SELECT t.name FROM track_to_download td JOIN tracks t ON t.id=td.track_id WHERE td.download_id=$1 ORDER BY t.id LIMIT 1),
         (SELECT al.name FROM albums al WHERE al.cover_download_id=$1 ORDER BY al.id LIMIT 1), '')`, id).Scan(&artist, &title)

@@ -385,13 +385,13 @@ func (a *App) SaveTrack(ctx context.Context, id *uuid.UUID, f CatalogForm) (doma
 		}
 
 		if f.AlbumID != nil && r.AlbumID != nil {
-			album, err := tx.Albums.Get(ctx, *r.AlbumID)
+			linked, err := tx.Albums.HasArtist(ctx, *r.AlbumID, r.ArtistID)
 			if err != nil {
 				return err
 			}
 
-			if album.ArtistID != r.ArtistID {
-				return fmt.Errorf("%w: альбом принадлежит другому исполнителю", domain.ErrInvalid)
+			if !linked {
+				return fmt.Errorf("%w: альбом не связан с исполнителем", domain.ErrInvalid)
 			}
 		}
 

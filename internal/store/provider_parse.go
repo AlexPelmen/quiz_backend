@@ -21,7 +21,8 @@ func (r ArtistRepository) ClaimProvider(ctx context.Context, seconds int, starte
             (a.status IN ('partial','parsed') AND (($3='yt_music' AND a.yt_music_id IS NOT NULL AND NOT EXISTS (
                 SELECT 1 FROM artist_provider_lists WHERE artist_id=a.id AND provider='yt_music' AND kind='tracks_ranked_20'
             )) OR c.status IN ('partial','manual') OR EXISTS (
-                SELECT 1 FROM catalog_albums al WHERE al.artist_id=a.id AND cardinality(al.missing_fields)>0
+                SELECT 1 FROM catalog_albums al JOIN artist_to_album link ON link.album_id=al.id
+                WHERE link.artist_id=a.id AND cardinality(al.missing_fields)>0
             ) OR EXISTS (
                 SELECT 1 FROM catalog_tracks t WHERE t.artist_id=a.id AND cardinality(t.missing_fields)>0
             ) OR (

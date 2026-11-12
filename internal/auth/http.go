@@ -159,6 +159,15 @@ func requiredSection(method, path string) string {
 		return ""
 	}
 
+	if method == "GET" && len(parts) == 2 && parts[1] == "count" {
+		switch parts[0] {
+		case "artists", "albums", "tracks", "downloads":
+			return parts[0]
+		case "quiz-packs":
+			return "packs"
+		}
+	}
+
 	if method == "GET" && (parts[0] == "quiz-packs" || parts[0] == "downloads" && len(parts) == 3 && parts[2] == "file" || parts[0] == "artists" && len(parts) == 2 || parts[0] == "albums" && len(parts) == 2 || parts[0] == "tracks" && (len(parts) == 2 || len(parts) == 3 && parts[2] == "artists")) {
 		return "player"
 	}
@@ -207,7 +216,7 @@ func allowedSection(u User, section string, r *http.Request) bool {
 		return true
 	}
 
-	if section == "artists" && path == "artists" && u.Can("parsing-errors") {
+	if section == "artists" && (path == "artists" || path == "artists/count") && u.Can("parsing-errors") {
 		switch r.URL.Query().Get("status") {
 		case "error", "errored", "partial", "manual":
 			return true

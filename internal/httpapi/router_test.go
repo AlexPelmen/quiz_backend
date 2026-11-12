@@ -165,7 +165,7 @@ func testPack(t *testing.T, pool *pgxpool.Pool, router http.Handler) {
 		seedHTTPTrack(t, pool, i)
 	}
 
-	data := call("POST", "/api/v1/quiz-packs", `{"name":"Квиз"}`, 201)
+	data := call("POST", "/api/v1/quiz-packs", `{"name":"Квиз","question_count":10,"round_types":["artist_by_track"]}`, 201)
 
 	var p domain.QuizPack
 
@@ -215,7 +215,7 @@ func testMultipleRounds(t *testing.T, pool *pgxpool.Pool, router http.Handler) {
 	}
 
 	call := client(t, router)
-	data := call("POST", "/api/v1/quiz-packs", `{"name":"Два раунда"}`, 201)
+	data := call("POST", "/api/v1/quiz-packs", `{"name":"Два раунда","question_count":20,"round_types":["artist_by_track","artist_by_cover"]}`, 201)
 
 	var pack domain.QuizPack
 

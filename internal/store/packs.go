@@ -79,13 +79,14 @@ type PickFilter struct {
 	Kind             string
 	Tag              string
 	Center           float64
+	CenterSet        bool
 	GuessRateEnabled bool
 	AskedThreshold   int64
 }
 
 func rankCandidates(eligible, columns string, filter PickFilter, args []any) (string, []any) {
 	center := filter.Center
-	if center == 0 {
+	if center == 0 && !filter.CenterSet {
 		center = 0.5
 	}
 	// Экспоненциальная гонка даёт взвешенный случайный порядок без повторов.

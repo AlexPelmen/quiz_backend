@@ -20,12 +20,13 @@ import (
 
 // PackForm задаёт параметры нового пакета или его описания.
 type PackForm struct {
-	Name        string   `json:"name"`
-	Description string   `json:"description"`
-	Tags        []string `json:"tags"`
-	ArtistTag   string   `json:"artist_tag"`
-	Difficulty  string   `json:"difficulty"`
-	RoundTypes  []string `json:"round_types"`
+	Name          string   `json:"name"`
+	Description   string   `json:"description"`
+	Tags          []string `json:"tags"`
+	ArtistTag     string   `json:"artist_tag"`
+	Difficulty    string   `json:"difficulty"`
+	RoundTypes    []string `json:"round_types"`
+	QuestionCount *int     `json:"question_count"`
 }
 
 // Generate собирает полные раунды; не обращается к внешним источникам.
@@ -55,6 +56,14 @@ func (a *App) Generate(ctx context.Context, f PackForm, cover io.Reader) (domain
 		return p, err
 	}
 
+	questionCount := 100
+	if f.QuestionCount != nil {
+		questionCount = *f.QuestionCount
+	}
+	if questionCount < 10 || questionCount > 100 || questionCount%roundSize != 0 {
+		return p, fmt.Errorf("%w: количество вопросов должно быть от 10 до 100 и кратно 10", domain.ErrInvalid)
+	}
+
 	settings, err := a.Settings(ctx)
 	if err != nil {
 		return p, err
@@ -77,7 +86,7 @@ func (a *App) Generate(ctx context.Context, f PackForm, cover io.Reader) (domain
 	}
 
 	err = a.uow.Transaction(ctx, func(tx *store.UnitOfWork) error {
-		if err := buildPack(ctx, tx, &p, packRounds{kinds, f.ArtistTag, f.RoundTypes != nil, settings}); err != nil {
+		if err := buildPack(ctx, tx, &p, packRounds{kinds: kinds, tag: f.ArtistTag, count: questionCount / roundSize, settings: settings}); err != nil {
 			return err
 		}
 
@@ -101,8 +110,8 @@ func (a *App) Generate(ctx context.Context, f PackForm, cover io.Reader) (domain
 }
 
 func validatePackRounds(kinds []string) error {
-	if kinds != nil && (len(kinds) == 0 || len(kinds) > 10) {
-		return fmt.Errorf("%w: выберите от 1 до 10 типов раундов", domain.ErrInvalid)
+	if kinds != nil && len(kinds) == 0 {
+		return fmt.Errorf("%w: выберите хотя бы один тип раунда", domain.ErrInvalid)
 	}
 
 	seen := map[string]bool{}
@@ -120,40 +129,51 @@ func validatePackRounds(kinds []string) error {
 type packRounds struct {
 	kinds    []string
 	tag      string
-	explicit bool
+	count    int
 	settings domain.Settings
 }
 
 func buildPack(ctx context.Context, tx *store.UnitOfWork, p *domain.QuizPack, input packRounds) error {
 	used := []uuid.UUID{}
-	for _, kind := range input.kinds {
+	for _, kind := range selectRoundTypes(input.kinds, input.count) {
 		round, err := buildRound(ctx, tx, roundInput{
 			Kind: kind, Tag: input.tag, Used: used, Pack: *p, Settings: input.settings,
 		})
 		if errors.Is(err, domain.ErrNotFound) {
-			if input.explicit {
-				return fmt.Errorf("%w: недостаточно исполнителей для раунда %s", domain.ErrInsufficient, kind)
-			}
-
-			break
+			return fmt.Errorf("%w: недостаточно исполнителей для раунда %s", domain.ErrInsufficient, kind)
 		}
-
 		if err != nil {
 			return err
 		}
-
 		p.Rounds = append(p.Rounds, round)
-
 		for _, q := range round.Questions {
 			used = append(used, q.ArtistID)
 		}
 	}
 
-	if len(p.Rounds) == 0 {
-		return domain.ErrInsufficient
-	}
-
 	return nil
+}
+
+// selectRoundTypes перемешивает типы в каждом цикле, прежде чем повторять их.
+func selectRoundTypes(kinds []string, count int) []string {
+	unique := make([]string, 0, len(kinds))
+	seen := make(map[string]bool, len(kinds))
+	for _, kind := range kinds {
+		if !seen[kind] {
+			seen[kind] = true
+			unique = append(unique, kind)
+		}
+	}
+	if len(unique) == 0 {
+		return nil
+	}
+	result := make([]string, 0, count)
+	for len(result) < count {
+		cycle := slices.Clone(unique)
+		rand.Shuffle(len(cycle), func(i, j int) { cycle[i], cycle[j] = cycle[j], cycle[i] })
+		result = append(result, cycle[:min(len(cycle), count-len(result))]...)
+	}
+	return result
 }
 
 type roundInput struct {
@@ -165,17 +185,17 @@ type roundInput struct {
 }
 
 func (in roundInput) pickFilter() store.PickFilter {
-	center := 0.5
+	center := 0.35
 
 	switch in.Pack.Difficulty {
 	case "easy":
-		center = 0.2
+		center = 0
 	case "hard":
 		center = 0.8
 	}
 
 	return store.PickFilter{
-		Kind: in.Kind, Tag: in.Tag, Center: center,
+		Kind: in.Kind, Tag: in.Tag, Center: center, CenterSet: true,
 		GuessRateEnabled: in.Settings.QuizGuessRateEnabled, AskedThreshold: in.Settings.QuizGuessRateAskedThreshold,
 	}
 }

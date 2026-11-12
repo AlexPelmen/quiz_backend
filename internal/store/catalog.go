@@ -91,7 +91,18 @@ func (r ArtistRepository) Delete(ctx context.Context, id uuid.UUID) error {
             WHERE removed.is_primary AND other.artist_id<>$1 ORDER BY other.track_id,other.artist_id
         ) UPDATE artist_to_track owner SET is_primary=true FROM replacement r
           WHERE (owner.track_id,owner.artist_id)=(r.track_id,r.artist_id)`,
-		"DELETE FROM albums WHERE id IN (SELECT album_id FROM artist_to_album WHERE artist_id=$1)",
+		`SELECT al.id FROM albums al JOIN artist_to_album owner ON owner.album_id=al.id
+            WHERE owner.artist_id=$1 ORDER BY al.id FOR UPDATE OF al`,
+		`DELETE FROM albums al USING artist_to_album owner WHERE owner.album_id=al.id AND owner.artist_id=$1
+            AND NOT EXISTS (SELECT 1 FROM artist_to_album other WHERE other.album_id=al.id AND other.artist_id<>$1)`,
+		`WITH removed AS (
+            DELETE FROM artist_to_album WHERE artist_id=$1 RETURNING album_id,is_primary
+        ), replacement AS (
+            SELECT DISTINCT ON (other.album_id) other.album_id,other.artist_id
+            FROM artist_to_album other JOIN removed USING (album_id)
+            WHERE removed.is_primary AND other.artist_id<>$1 ORDER BY other.album_id,other.artist_id
+        ) UPDATE artist_to_album owner SET is_primary=true FROM replacement r
+          WHERE (owner.album_id,owner.artist_id)=(r.album_id,r.artist_id)`,
 	} {
 		if _, err := r.db.Exec(ctx, sql, id); err != nil {
 			return translate(err)
@@ -179,7 +190,8 @@ type AlbumRepository struct{ db DB }
 // List возвращает страницу альбомов с фильтром по исполнителю и статусу.
 func (r AlbumRepository) List(ctx context.Context, p domain.Page) ([]domain.Album, error) {
 	return query[domain.Album](ctx, r.db, `SELECT * FROM catalog_albums
-        WHERE ($3::uuid IS NULL OR artist_id=$3) AND ($4='' OR status=$4)
+        WHERE ($3::uuid IS NULL OR EXISTS (SELECT 1 FROM artist_to_album link
+            WHERE link.album_id=catalog_albums.id AND link.artist_id=$3)) AND ($4='' OR status=$4)
         ORDER BY `+catalogOrder(p, "created_at,id")+` LIMIT $1 OFFSET $2`,
 		[]any{p.Limit, p.Offset, p.ArtistID, p.Status})
 }
@@ -187,6 +199,13 @@ func (r AlbumRepository) List(ctx context.Context, p domain.Page) ([]domain.Albu
 // Get возвращает альбом по ID.
 func (r AlbumRepository) Get(ctx context.Context, id uuid.UUID) (domain.Album, error) {
 	return one[domain.Album](ctx, r.db, `SELECT * FROM catalog_albums WHERE id=$1`, []any{id})
+}
+
+// HasArtist проверяет, связан ли альбом с исполнителем.
+func (r AlbumRepository) HasArtist(ctx context.Context, id, artistID uuid.UUID) (bool, error) {
+	var linked bool
+	err := r.db.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM artist_to_album WHERE album_id=$1 AND artist_id=$2)`, id, artistID).Scan(&linked)
+	return linked, translate(err)
 }
 
 // Create сохраняет альбом и его владельца одним запросом.
@@ -231,7 +250,7 @@ func (r AlbumRepository) SetCover(ctx context.Context, id, downloadID uuid.UUID)
 	return execute(ctx, r.db, "UPDATE albums SET cover_download_id=$2,updated_at=now() WHERE id=$1", []any{id, downloadID})
 }
 
-// Import находит альбом по ID источника или однозначному имени в каталоге исполнителя.
+// Import находит альбом по ID источника во всём каталоге или по имени у исполнителя.
 func (r AlbumRepository) Import(ctx context.Context, a domain.Album) (domain.Album, error) {
 	return r.importAlbum(ctx, a, false)
 }
@@ -242,8 +261,10 @@ func (r AlbumRepository) Fill(ctx context.Context, a domain.Album) (domain.Album
 }
 
 func (r AlbumRepository) importAlbum(ctx context.Context, a domain.Album, fill bool) (domain.Album, error) {
-	matches, err := query[domain.Album](ctx, r.db, `SELECT * FROM catalog_albums WHERE artist_id=$1 AND
-        (yt_music_id=$2 OR genius_id=$3 OR ($4<>'' AND music_brainz_id=$4) OR (lower(trim(name))=lower(trim($5))
+	matches, err := query[domain.Album](ctx, r.db, `SELECT * FROM catalog_albums WHERE
+        (yt_music_id=$2 OR genius_id=$3 OR ($4<>'' AND music_brainz_id=$4) OR
+        (EXISTS (SELECT 1 FROM artist_to_album link WHERE link.album_id=catalog_albums.id AND link.artist_id=$1)
+            AND lower(trim(name))=lower(trim($5))
             AND (yt_music_id IS NULL OR $2::text IS NULL OR yt_music_id=$2)
             AND (genius_id IS NULL OR $3::bigint IS NULL OR genius_id=$3)
             AND (music_brainz_id='' OR $4='' OR music_brainz_id=$4)))
@@ -263,6 +284,10 @@ func (r AlbumRepository) importAlbum(ctx context.Context, a domain.Album, fill b
 
 	if id == uuid.Nil {
 		return r.Create(ctx, a)
+	}
+	if _, err := r.db.Exec(ctx, `INSERT INTO artist_to_album(album_id,artist_id,is_primary) VALUES ($1,$2,false)
+        ON CONFLICT (album_id,artist_id) DO NOTHING`, id, a.ArtistID); err != nil {
+		return a, translate(err)
 	}
 	if fill {
 		err := execute(ctx, r.db, `UPDATE albums SET

@@ -20,6 +20,12 @@ func (a *App) collectCatalog(
 
 	limit := importTrackLimit(*artist, catalog.YtSubs)
 	albumLimit := domain.AlbumImportLimit(firstKnown(artist.YtSubs, catalog.YtSubs))
+	catalog.Tracks = slices.DeleteFunc(catalog.Tracks, func(track source.Song) bool {
+		return slices.ContainsFunc(saved.Tracks, func(existing source.Song) bool {
+			return trackTitleKey(track.Title) != "" && trackTitleKey(track.Title) == trackTitleKey(existing.Title) && track.Title != existing.Title
+		})
+	})
+	catalog.Tracks = uniqueTrackTitles(catalog.Tracks)
 	catalog.Tracks = catalog.Tracks[:min(limit, len(catalog.Tracks))]
 	reuseSaved(&catalog, saved)
 
@@ -28,7 +34,9 @@ func (a *App) collectCatalog(
 			break
 		}
 
-		if index, ambiguous := trackMatch(catalog.Tracks, track); index < 0 && !ambiguous {
+		if index, ambiguous := trackMatch(catalog.Tracks, track); index < 0 && !ambiguous && !slices.ContainsFunc(catalog.Tracks, func(t source.Song) bool {
+			return trackTitleKey(t.Title) != "" && trackTitleKey(t.Title) == trackTitleKey(track.Title)
+		}) {
 			catalog.Tracks = append(catalog.Tracks, track)
 		}
 	}
@@ -76,6 +84,7 @@ func (a *App) collectCatalog(
 	}
 
 	catalog.Name = firstKnown(catalog.Name, musicBrainzName)
+	catalog.Tracks = uniqueTrackTitles(catalog.Tracks)
 	catalog.Tracks = catalog.Tracks[:min(limit, len(catalog.Tracks))]
 	reuseSaved(&catalog, saved)
 

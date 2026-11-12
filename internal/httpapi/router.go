@@ -40,6 +40,12 @@ func Router(app *service.App, logger *slog.Logger) *gin.Engine {
 
 	v1 := r.Group("/api/v1")
 	v1.GET("/album-guessing", h.guessingList)
+	v1.GET("/album-guessing/count", h.catalogCount("album-guessing"))
+	v1.GET("/album-cleanup/count", h.catalogCount("album-cleanup"))
+	for _, resource := range []string{"artists", "albums", "tracks", "downloads", "quiz-packs"} {
+		v1.GET("/"+resource+"/count", h.catalogCount(resource))
+	}
+	v1.GET("/downloads/active-count", h.downloadActiveCount)
 	v1.PUT("/albums/:id/guessing", h.saveGuessing)
 	v1.GET("/albums/:id/guessing-preview", h.guessingPreview)
 	v1.GET("/quiz-packs/:id/questions/:number/cover", h.questionCover)

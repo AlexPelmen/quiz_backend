@@ -90,7 +90,7 @@ func TestAlbumGuessing(t *testing.T) {
 	call("PATCH", "/api/v1/settings", `{"round_types":["artist_by_cover","artist_by_track","track_vowels",
 		"artist_by_logo","artist_initial","artist_by_track","artist_by_track","artist_by_track",
 		"artist_by_track","artist_by_track"]}`, 200)
-	call("POST", "/api/v1/quiz-packs", `{"name":"Непроверенные обложки"}`, 422)
+	call("POST", "/api/v1/quiz-packs", `{"name":"Непроверенные обложки","question_count":10,"round_types":["artist_by_cover"]}`, 422)
 
 	var covers []domain.AlbumGuessing
 
@@ -120,7 +120,7 @@ func TestAlbumGuessing(t *testing.T) {
 
 	var pack domain.QuizPack
 
-	raw := call("POST", "/api/v1/quiz-packs", `{"name":"Проверенные обложки"}`, 201)
+	raw := call("POST", "/api/v1/quiz-packs", `{"name":"Проверенные обложки","question_count":10,"round_types":["artist_by_cover"]}`, 201)
 	decodeResult(t, raw, &pack)
 
 	if len(pack.Rounds) != 1 || len(pack.Rounds[0].Questions) != 10 {
@@ -143,7 +143,7 @@ func TestAlbumGuessing(t *testing.T) {
 	checkCoverPixels(t, call("GET", "/api/v1/downloads/"+first.CoverDownloadID.String()+"/file", "", 200), false)
 	call("PUT", editURL, form(first, false, mask), 204)
 	call("GET", coverURL, "", 404)
-	call("POST", "/api/v1/quiz-packs", `{"name":"Недостаточно обложек"}`, 422)
+	call("POST", "/api/v1/quiz-packs", `{"name":"Недостаточно обложек","question_count":10,"round_types":["artist_by_cover"]}`, 422)
 	call("PUT", editURL, form(first, true, `[]`), 204)
 	checkCoverPixels(t, call("GET", coverURL, "", 200), false)
 	replaceCover(t, pool, first.AlbumID, original)

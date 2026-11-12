@@ -39,7 +39,7 @@ func TestRoundResults(t *testing.T) {
 
 	var pack domain.QuizPack
 
-	decodeResult(t, call("POST", "/api/v1/quiz-packs", `{"name":"Статистика"}`, 201), &pack)
+	decodeResult(t, call("POST", "/api/v1/quiz-packs", `{"name":"Статистика","question_count":30,"round_types":["artist_by_track","artist_by_cover","artist_by_logo"]}`, 201), &pack)
 
 	if len(pack.Rounds) != 3 {
 		t.Fatalf("получено раундов: %d, ожидались звук, обложка и логотип", len(pack.Rounds))
