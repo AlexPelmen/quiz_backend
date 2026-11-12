@@ -18,22 +18,27 @@ import (
 	"github.com/google/uuid"
 
 	"devkeeper.com/quiz/internal/domain"
+	"devkeeper.com/quiz/internal/logbuffer"
 	"devkeeper.com/quiz/internal/service"
 )
 
 type api struct {
-	app *service.App
-	log *slog.Logger
+	app  *service.App
+	log  *slog.Logger
+	logs *logbuffer.Buffer
 }
 
 // Router создаёт маршруты API без авторизации.
-func Router(app *service.App, logger *slog.Logger) *gin.Engine {
+func Router(app *service.App, logger *slog.Logger, buffers ...*logbuffer.Buffer) *gin.Engine {
 	gin.SetMode(gin.ReleaseMode)
 
 	r := gin.New()
 	r.Use(gin.RecoveryWithWriter(os.Stderr))
 
 	h := &api{app: app, log: logger}
+	if len(buffers) > 0 {
+		h.logs = buffers[0]
+	}
 
 	r.GET("/health", func(c *gin.Context) { c.JSON(http.StatusOK, gin.H{"status": "ok"}) })
 	r.GET("/ready", h.ready)
@@ -83,6 +88,13 @@ func Router(app *service.App, logger *slog.Logger) *gin.Engine {
 	v1.POST("/storage/actions", h.storageAction)
 	v1.GET("/quiz-packs/:id/questions/:number/audio", h.audio)
 	v1.POST("/quiz-rounds/:id/results", h.recordRoundResult)
+	v1.GET("/questions/:id/like", h.questionLike)
+	v1.PUT("/questions/:id/like", h.questionLike)
+	v1.POST("/questions/:id/feedback", h.submitFeedback)
+	v1.GET("/question-feedback", h.feedbackQuestions)
+	v1.GET("/question-feedback/:id", h.questionReports)
+	v1.PATCH("/question-feedback/:id", h.viewFeedback)
+	v1.GET("/system-logs", h.systemLogs)
 	v1.GET("/settings", h.settings)
 	v1.PATCH("/settings", h.patchSettings)
 	v1.GET("/genius-quota", h.geniusQuota)

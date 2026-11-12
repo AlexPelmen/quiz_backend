@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"os"
@@ -16,19 +17,22 @@ import (
 
 	"devkeeper.com/quiz/internal/auth"
 	"devkeeper.com/quiz/internal/httpapi"
+	"devkeeper.com/quiz/internal/logbuffer"
 	"devkeeper.com/quiz/internal/service"
 	"devkeeper.com/quiz/internal/store"
 )
 
 func main() {
-	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
-	if err := run(logger); err != nil {
+	logs := logbuffer.New(1000)
+	logger := slog.New(slog.NewJSONHandler(io.MultiWriter(os.Stdout, logs), nil))
+	slog.SetDefault(logger)
+	if err := run(logger, logs); err != nil {
 		logger.Error("сервис завершился с ошибкой", "error", err)
 		os.Exit(1)
 	}
 }
 
-func run(logger *slog.Logger) error {
+func run(logger *slog.Logger, logs *logbuffer.Buffer) error {
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 
@@ -61,7 +65,7 @@ func run(logger *slog.Logger) error {
 	}
 
 	server := &http.Server{
-		Addr: address, Handler: auth.Handler(httpapi.Router(app, logger), authorization, os.Getenv("AUTH_COOKIE_SECURE") == "true"),
+		Addr: address, Handler: auth.Handler(httpapi.Router(app, logger, logs), authorization, os.Getenv("AUTH_COOKIE_SECURE") == "true"),
 		ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 30 * time.Second,
 		IdleTimeout: 60 * time.Second, MaxHeaderBytes: 1 << 20,
 		BaseContext: nil,

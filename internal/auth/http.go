@@ -1,6 +1,7 @@
 package auth
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"log/slog"
@@ -134,7 +135,7 @@ func Handler(next http.Handler, service *Service, secureCookie bool) http.Handle
 			}
 		}
 
-		next.ServeHTTP(w, r)
+		next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), userContextKey{}, u.ID)))
 	})
 }
 
@@ -172,6 +173,13 @@ func requiredSection(method, path string) string {
 		return "player"
 	}
 
+	if parts[0] == "questions" && len(parts) == 3 && (parts[2] == "feedback" || parts[2] == "like") {
+		return "player"
+	}
+	if parts[0] == "question-feedback" {
+		return "question-feedback"
+	}
+
 	if method == "POST" && parts[0] == "quiz-rounds" && len(parts) == 3 && parts[2] == "results" {
 		return "player"
 	}
@@ -181,7 +189,7 @@ func requiredSection(method, path string) string {
 	}
 
 	switch parts[0] {
-	case "artists", "albums", "tracks", "downloads", "storage", "tags", "settings":
+	case "artists", "albums", "tracks", "downloads", "storage", "tags", "settings", "system-logs":
 		return parts[0]
 	case "quiz-packs":
 		return "packs"

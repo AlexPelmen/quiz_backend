@@ -213,6 +213,10 @@ func (u User) Can(section string) bool {
 		return true
 	}
 
+	if (section == "parsing-errors" || section == "parsing-logs") && u.Can("parsing") {
+		return true
+	}
+
 	if u.Role == "moderator" && section == "album-guessing" {
 		return true
 	}
@@ -248,7 +252,7 @@ func (s *Service) CanReadFile(ctx context.Context, user User, id uuid.UUID) (boo
 }
 
 // ValidSections перечисляет поддерживаемые права интерфейса.
-var ValidSections = map[string]bool{"artists": true, "albums": true, "tracks": true, "album-guessing": true, "album-cleanup": true, "parsing": true, "parsing-logs": true, "parsing-errors": true, "downloads": true, "storage": true, "packs": true, "tags": true, "settings": true, "console": true, "users": true}
+var ValidSections = map[string]bool{"artists": true, "albums": true, "tracks": true, "album-guessing": true, "question-feedback": true, "album-cleanup": true, "parsing": true, "parsing-logs": true, "parsing-errors": true, "downloads": true, "storage": true, "packs": true, "tags": true, "settings": true, "console": true, "users": true}
 
 func validateUser(name, login, role string, permissions []string) error {
 	if !utf8.ValidString(name) || !utf8.ValidString(login) || strings.TrimSpace(name) == "" || strings.TrimSpace(login) == "" || len(name) > 1000 || len(login) > 200 {
