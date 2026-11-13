@@ -3,7 +3,6 @@ package store_test
 import (
 	"testing"
 
-	"devkeeper.com/quiz/internal/domain"
 	"devkeeper.com/quiz/internal/store"
 	"devkeeper.com/quiz/internal/testutil"
 	"github.com/google/uuid"
@@ -41,12 +40,8 @@ func TestQuizUsesReadyTrackOutsidePopularList(t *testing.T) {
 	if err != nil || picked.Artist.ID != artist || picked.Track.ID != ready {
 		t.Fatalf("подбор: %+v, %v", picked, err)
 	}
-	artists, err := uow.Packs.AudioArtists(ctx, []uuid.UUID{}, filter)
-	if err != nil || len(artists) != 1 || artists[0].ID != artist {
-		t.Fatalf("исполнители: %+v, %v", artists, err)
-	}
-	direct, err := uow.Packs.PickTrack(ctx, domain.Candidate{Artist: picked.Artist}, filter)
-	if err != nil || direct.Track.ID != ready {
-		t.Fatalf("трек: %+v, %v", direct, err)
+	tracks, err := uow.Packs.AudioTracks(ctx, "")
+	if err != nil || len(tracks) != 1 || tracks[0].ID != ready || tracks[0].ArtistID != artist {
+		t.Fatalf("рейтинг: %+v, %v", tracks, err)
 	}
 }

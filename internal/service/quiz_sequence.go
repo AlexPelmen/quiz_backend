@@ -2,7 +2,6 @@ package service
 
 import (
 	"context"
-	"fmt"
 	"slices"
 	"strings"
 	"unicode"
@@ -28,37 +27,52 @@ func buildSequenceRound(
 	ctx context.Context, packs store.PackRepository, in roundInput, round domain.QuizRound,
 ) (domain.QuizRound, error) {
 	filter := in.pickFilter()
-	artists, err := packs.AudioArtists(ctx, in.Used, filter)
-	if err != nil {
-		return round, err
+	items := make(map[uuid.UUID]sequenceArtist)
+	for _, track := range in.Audio {
+		if slices.Contains(in.Used, track.ArtistID) {
+			continue
+		}
+		if _, ok := items[track.ArtistID]; !ok {
+			artist := domain.Artist{ID: track.ArtistID, Name: track.ArtistName}
+			item := sequenceName(artist)
+			if in.Kind == "artist_cities" {
+				item = cityName(artist)
+			}
+			items[track.ArtistID] = item
+		}
 	}
 
-	sequence := pickSequence(ctx, in.Kind, artists)
-
-	if err := ctx.Err(); err != nil {
-		return round, err
-	}
-
-	if len(sequence) != roundSize {
-		return round, domain.ErrNotFound
-	}
-
-	for i, item := range sequence {
-		c, err := packs.PickTrack(ctx, domain.Candidate{Artist: item.artist}, filter)
-		if err != nil {
+	var previous sequenceArtist
+	for i := range roundSize {
+		remaining := roundSize - i - 1
+		matches := sequenceChoices(ctx, in.Kind, items, previous, remaining)
+		if err := ctx.Err(); err != nil {
 			return round, err
 		}
 
+		tracks := make([]store.AudioTrack, 0, len(in.Audio))
+		for _, track := range in.Audio {
+			if item, ok := items[track.ArtistID]; ok && matches(item) {
+				tracks = append(tracks, track)
+			}
+		}
+		track, ok := filter.PickAudioTrack(tracks)
+		if !ok {
+			return round, domain.ErrNotFound
+		}
+
+		c, err := packs.AudioCandidate(ctx, track)
+		if err != nil {
+			return round, err
+		}
 		q, err := makeQuestion(in.Kind, c)
 		if err != nil {
 			return round, err
 		}
 
-		if in.Kind == "artist_growth" {
-			q.SecondaryText = fmt.Sprintf("Букв в названии: %d", item.length)
-		}
-
 		appendQuestion(&round, q, i)
+		previous = items[track.ArtistID]
+		delete(items, track.ArtistID)
 	}
 
 	return round, nil
@@ -69,7 +83,11 @@ func sequenceName(artist domain.Artist) sequenceArtist {
 	cleanName := cleanQuestionName(artist.Name)
 	name := latinArtistName(cleanName)
 
-	for _, r := range cleanName {
+	countName := cleanName
+	if first, rest, ok := strings.Cut(cleanName, " "); ok && strings.EqualFold(first, "the") {
+		countName = rest
+	}
+	for _, r := range countName {
 		if unicode.IsLetter(r) {
 			item.length++
 		}
@@ -156,9 +174,12 @@ func cityName(artist domain.Artist) sequenceArtist {
 	return sequenceArtist{artist: artist, first: byte(first), last: byte(last)}
 }
 
-func pickSequence(ctx context.Context, kind string, artists []domain.Artist) []sequenceArtist {
+func sequenceChoices(
+	ctx context.Context, kind string, items map[uuid.UUID]sequenceArtist, previous sequenceArtist, remaining int,
+) func(sequenceArtist) bool {
 	if kind == "artist_cities" {
-		return citySequence(ctx, artists)
+		edges := cityChoices(ctx, items, previous.last, remaining)
+		return func(item sequenceArtist) bool { return edges[[2]byte{item.first, item.last}] }
 	}
 
 	key := func(item sequenceArtist) int { return int(item.first) }
@@ -166,102 +187,94 @@ func pickSequence(ctx context.Context, kind string, artists []domain.Artist) []s
 		key = func(item sequenceArtist) int { return item.length }
 	}
 
-	seen := map[int]bool{}
-	result := make([]sequenceArtist, 0, roundSize)
-
-	for _, artist := range artists {
-		item := sequenceName(artist)
-		k := key(item)
-
-		if k == 0 || seen[k] {
-			continue
-		}
-
-		seen[k] = true
-
-		result = append(result, item)
-
-		if len(result) == roundSize {
-			break
+	minimum := key(previous)
+	values := make(map[int]bool)
+	for _, item := range items {
+		if value := key(item); value > minimum {
+			values[value] = true
 		}
 	}
 
-	slices.SortFunc(result, func(a, b sequenceArtist) int { return key(a) - key(b) })
+	ordered := make([]int, 0, len(values))
+	for value := range values {
+		ordered = append(ordered, value)
+	}
+	slices.Sort(ordered)
+	if len(ordered) <= remaining {
+		return func(sequenceArtist) bool { return false }
+	}
 
-	return result
+	// Более поздний старт должен оставлять достаточно разных значений для конца раунда.
+	maximum := ordered[len(ordered)-remaining-1]
+	if kind == "artist_growth" {
+		low, high := minimum+1, minimum+2
+		if minimum == 0 {
+			low, high = 2, 4
+		}
+		for value := low; value <= min(high, maximum); value++ {
+			if values[value] {
+				minimum, maximum = low-1, min(high, maximum)
+				break
+			}
+		}
+	}
+
+	return func(item sequenceArtist) bool {
+		value := key(item)
+		return value > minimum && value <= maximum
+	}
 }
 
-func citySequence(ctx context.Context, artists []domain.Artist) []sequenceArtist {
-	byFirst := map[byte][]sequenceArtist{}
-	counts := map[[2]byte]int{}
-	starts := []byte{}
-
-	for _, artist := range artists {
-		item := cityName(artist)
+func cityChoices(
+	ctx context.Context, items map[uuid.UUID]sequenceArtist, required byte, remaining int,
+) map[[2]byte]bool {
+	type edge = [2]byte
+	counts := make(map[edge]int)
+	byFirst := make(map[byte][]edge)
+	for _, item := range items {
 		if item.first == 0 {
 			continue
 		}
-
-		edge := [2]byte{item.first, item.last}
-		if counts[edge] == roundSize {
-			continue
+		e := edge{item.first, item.last}
+		if counts[e] == 0 {
+			byFirst[item.first] = append(byFirst[item.first], e)
 		}
-
-		counts[edge]++
-
-		if len(byFirst[item.first]) == 0 {
-			starts = append(starts, item.first)
-		}
-
-		byFirst[item.first] = append(byFirst[item.first], item)
+		counts[e]++
 	}
 
-	path := make([]sequenceArtist, 0, roundSize)
-	used := map[uuid.UUID]bool{}
 	budget := 100000
-
-	var visit func(byte) bool
-
-	visit = func(first byte) bool {
-		if len(path) == roundSize {
+	var canFinish func(byte, int) bool
+	canFinish = func(first byte, left int) bool {
+		if left == 0 {
 			return true
 		}
-
 		if budget <= 0 || ctx.Err() != nil {
 			return false
 		}
-
 		budget--
-		tried := map[byte]bool{}
 
-		for _, item := range byFirst[first] {
-			if used[item.artist.ID] || tried[item.last] {
+		for _, e := range byFirst[first] {
+			if counts[e] == 0 {
 				continue
 			}
-
-			// Исполнители с одинаковыми крайними буквами взаимозаменяемы для поиска цепочки.
-			tried[item.last] = true
-			used[item.artist.ID] = true
-
-			path = append(path, item)
-
-			if visit(item.last) {
+			counts[e]--
+			ok := canFinish(e[1], left-1)
+			counts[e]++
+			if ok {
 				return true
 			}
-
-			path = path[:len(path)-1]
-
-			delete(used, item.artist.ID)
 		}
-
 		return false
 	}
 
-	for _, first := range starts {
-		if visit(first) {
-			return path
+	choices := make(map[edge]bool)
+	for e := range counts {
+		if required != 0 && e[0] != required {
+			continue
 		}
+		counts[e]--
+		choices[e] = canFinish(e[1], remaining)
+		counts[e]++
 	}
-
-	return nil
+	return choices
 }

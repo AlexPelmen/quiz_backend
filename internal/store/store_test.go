@@ -267,15 +267,19 @@ func TestTransactionsAndQueue(t *testing.T) {
 	}
 }
 
-func TestWeightedSelection(t *testing.T) {
+func TestAudioSelectionFollowsTrackPlays(t *testing.T) {
 	pool, uow := testutil.Database(t)
 	ctx := t.Context()
 	low := seedCandidate(t, pool, 1)
 	high := seedCandidate(t, pool, 100)
+	// Рейтинг исполнителей противоположен рейтингу их треков.
+	if _, err := pool.Exec(ctx, `UPDATE artists SET yt_plays=101-yt_plays`); err != nil {
+		t.Fatal(err)
+	}
 	counts := map[uuid.UUID]int{}
 
 	for range 200 {
-		c, err := uow.Packs.Pick(ctx, []uuid.UUID{}, store.PickFilter{Kind: "artist_by_track", Center: 0.2})
+		c, err := uow.Packs.Pick(ctx, []uuid.UUID{}, store.PickFilter{Kind: "artist_by_track", Center: 0, CenterSet: true})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -287,7 +291,7 @@ func TestWeightedSelection(t *testing.T) {
 		t.Fatalf("выбор не учитывает веса: %v", counts)
 	}
 
-	selected, err := uow.Packs.Pick(ctx, []uuid.UUID{high}, store.PickFilter{Kind: "artist_by_track", Center: 0.2})
+	selected, err := uow.Packs.Pick(ctx, []uuid.UUID{high}, store.PickFilter{Kind: "artist_by_track", Center: 0, CenterSet: true})
 	if err != nil || selected.Artist.ID != low {
 		t.Fatalf("не исключён исполнитель: %v", err)
 	}
@@ -352,6 +356,12 @@ func TestGuessRateThreshold(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	if _, err := pool.Exec(ctx, `WITH image AS (
+		INSERT INTO downloads(id,source_type,status,file_type) VALUES(gen_random_uuid(),'upload','finished','image') RETURNING id
+	) UPDATE artists SET logo_download_id=image.id FROM image`); err != nil {
+		t.Fatal(err)
+	}
+
 	for _, scenario := range []struct {
 		name    string
 		asked   int
@@ -368,7 +378,7 @@ func TestGuessRateThreshold(t *testing.T) {
 			}
 
 			filter := store.PickFilter{
-				Kind: "artist_by_track", Center: 0.2, GuessRateEnabled: scenario.enabled, AskedThreshold: 5,
+				Kind: "artist_by_logo", Center: 0.2, GuessRateEnabled: scenario.enabled, AskedThreshold: 5,
 			}
 			count := 0
 
@@ -410,9 +420,9 @@ func seedCandidate(t *testing.T, pool *pgxpool.Pool, plays int) uuid.UUID {
 			[]any{al, a},
 		},
 		{
-			`WITH saved AS (INSERT INTO tracks(id,name,album_id) VALUES($1,'Трек',$3) RETURNING id)
+			`WITH saved AS (INSERT INTO tracks(id,name,album_id,yt_plays) VALUES($1,'Трек',$3,$4) RETURNING id)
                 INSERT INTO artist_to_track(track_id,artist_id) SELECT id,$2 FROM saved`,
-			[]any{tr, a, al},
+			[]any{tr, a, al, plays},
 		},
 		{"INSERT INTO track_to_download VALUES($1,$2)", []any{tr, d}},
 	}

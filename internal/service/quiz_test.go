@@ -125,14 +125,61 @@ func TestCitySequenceBacktracks(t *testing.T) {
 		t.Fatal("название с цифрой на конце попало в цепочку")
 	}
 
-	sequence := citySequence(t.Context(), artists)
-	if len(sequence) != 10 || sequence[0].artist.Name != "The Аб" || sequence[1].artist.Name != "Bc" {
-		t.Fatalf("не найдена цепочка с откатом от тупика Bz: %+v", sequence)
+	items := make(map[uuid.UUID]sequenceArtist)
+	for _, artist := range artists {
+		items[artist.ID] = cityName(artist)
 	}
+	choices := cityChoices(t.Context(), items, 0, 9)
+	if !choices[[2]byte{'a', 'b'}] {
+		t.Fatal("не найден старт цепочки")
+	}
+	delete(items, artists[0].ID)
+	choices = cityChoices(t.Context(), items, 'b', 8)
+	if choices[[2]byte{'b', 'z'}] || !choices[[2]byte{'b', 'c'}] {
+		t.Fatalf("тупиковое продолжение не отсеяно: %v", choices)
+	}
+}
 
-	for i := 1; i < len(sequence); i++ {
-		if sequence[i-1].last != sequence[i].first {
-			t.Fatalf("цепочка разорвана между %q и %q", sequence[i-1].artist.Name, sequence[i].artist.Name)
+func TestGrowthChoicesLeaveRoomForFullRound(t *testing.T) {
+	items := make(map[uuid.UUID]sequenceArtist)
+	for _, name := range []string{"A", "The AB", "ABC", "ABCD", "ABCDEF", "ABCDEFGH"} {
+		artist := domain.Artist{ID: uuid.New(), Name: name}
+		items[artist.ID] = sequenceName(artist)
+	}
+	allowed := sequenceChoices(t.Context(), "artist_growth", items, sequenceArtist{}, 4)
+	for _, item := range items {
+		want := item.artist.Name == "The AB"
+		if allowed(item) != want {
+			t.Errorf("старт %q: допустим = %t, ожидалось %t", item.artist.Name, allowed(item), want)
 		}
+	}
+	allowed = sequenceChoices(t.Context(), "artist_growth", items, sequenceArtist{length: 4}, 0)
+	if !allowed(sequenceArtist{length: 6}) || allowed(sequenceArtist{length: 8}) {
+		t.Fatal("не выбран шаг на две буквы")
+	}
+	allowed = sequenceChoices(t.Context(), "artist_growth", items, sequenceArtist{length: 1}, 1)
+	if !allowed(sequenceArtist{length: 2}) || allowed(sequenceArtist{length: 4}) {
+		t.Fatal("не выбран шаг на одну или две буквы")
+	}
+	allowed = sequenceChoices(t.Context(), "artist_growth", items, sequenceArtist{length: 1}, 0)
+	if allowed(sequenceArtist{length: 6}) {
+		t.Fatal("дальний переход вытеснил доступный короткий шаг")
+	}
+	allowed = sequenceChoices(t.Context(), "artist_growth", items, sequenceArtist{length: 3}, 0)
+	if !allowed(sequenceArtist{length: 4}) || allowed(sequenceArtist{length: 8}) {
+		t.Fatal("не выбран ближайший шаг")
+	}
+	allowed = sequenceChoices(t.Context(), "artist_growth", items, sequenceArtist{length: 6}, 0)
+	if !allowed(sequenceArtist{length: 8}) {
+		t.Fatal("потерян последний доступный вариант")
+	}
+	for id, item := range items {
+		if item.length == 6 {
+			delete(items, id)
+		}
+	}
+	allowed = sequenceChoices(t.Context(), "artist_growth", items, sequenceArtist{length: 4}, 0)
+	if !allowed(sequenceArtist{length: 8}) {
+		t.Fatal("не разрешён дальний переход при отсутствии короткого")
 	}
 }

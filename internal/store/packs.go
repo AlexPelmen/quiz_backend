@@ -2,11 +2,9 @@ package store
 
 import (
 	"context"
-	"errors"
 	"fmt"
 
 	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5"
 
 	"devkeeper.com/quiz/internal/domain"
 )
@@ -16,6 +14,14 @@ type PackRepository struct{ db DB }
 
 // Pick выбирает исполнителя и нужный для типа раунда медиаобъект.
 func (r PackRepository) Pick(ctx context.Context, excluded []uuid.UUID, filter PickFilter) (domain.Candidate, error) {
+	if filter.UsesAudio() {
+		tracks, err := r.AudioTracks(ctx, filter.Tag)
+		if err != nil {
+			return domain.Candidate{}, err
+		}
+		return r.PickAudio(ctx, tracks, excluded, filter)
+	}
+
 	var c domain.Candidate
 
 	sql, args := rankCandidates(`SELECT a.* FROM catalog_artists a
@@ -25,11 +31,8 @@ func (r PackRepository) Pick(ctx context.Context, excluded []uuid.UUID, filter P
             WHERE al.artist_id=a.id AND NOT al.excluded_from_quiz)
         WHEN 'artist_by_logo' THEN EXISTS(SELECT 1 FROM downloads d
             WHERE d.id=a.logo_download_id AND d.status='finished')
-        WHEN 'artist_by_albums' THEN (SELECT count(DISTINCT al.name) FROM catalog_albums al
-            WHERE al.artist_id=a.id AND NOT al.excluded_from_quiz AND strpos(lower(al.name),lower(a.name))=0)>=2
-        ELSE EXISTS(SELECT 1 FROM tracks t JOIN artist_to_track owner ON owner.track_id=t.id
-            WHERE owner.artist_id=a.id AND NOT t.excluded_from_quiz
-            AND ($3<>'track_vowels' OR quiz_title_has_consonant(t.name)) AND EXISTS(`+finishedAudio+`)) END`,
+        ELSE (SELECT count(DISTINCT al.name) FROM catalog_albums al
+            WHERE al.artist_id=a.id AND NOT al.excluded_from_quiz AND strpos(lower(al.name),lower(a.name))=0)>=2 END`,
 		"e.*", filter, []any{excluded, filter.Tag, filter.Kind})
 
 	artist, err := one[domain.Artist](ctx, r.db, sql+" LIMIT 1", args)
@@ -56,22 +59,8 @@ func (r PackRepository) Pick(ctx context.Context, excluded []uuid.UUID, filter P
 
 		return c, err
 	default:
-		return r.PickTrack(ctx, c, filter)
+		return c, domain.ErrInvalid
 	}
-}
-
-// AudioArtists возвращает исполнителей с готовым звуком в порядке взвешенной выборки.
-func (r PackRepository) AudioArtists(
-	ctx context.Context, excluded []uuid.UUID, filter PickFilter,
-) ([]domain.Artist, error) {
-	sql, args := rankCandidates(`SELECT a.* FROM catalog_artists a
-        WHERE NOT a.excluded_from_quiz AND a.status IN ('parsed','manual','partial','error') AND NOT(a.id=ANY($1::uuid[]))
-        AND ($2='' OR $2=ANY(a.tags)) AND EXISTS(SELECT 1 FROM tracks t
-            JOIN artist_to_track owner ON owner.track_id=t.id
-            WHERE owner.artist_id=a.id AND NOT t.excluded_from_quiz AND EXISTS(`+finishedAudio+`))`,
-		"e.*", filter, []any{excluded, filter.Tag})
-
-	return query[domain.Artist](ctx, r.db, sql, args)
 }
 
 // PickFilter задаёт ограничения и конфигурацию выбора по позициям.
@@ -84,11 +73,15 @@ type PickFilter struct {
 	AskedThreshold   int64
 }
 
-func rankCandidates(eligible, columns string, filter PickFilter, args []any) (string, []any) {
-	center := filter.Center
-	if center == 0 && !filter.CenterSet {
-		center = 0.5
+func (f PickFilter) center() float64 {
+	if f.Center == 0 && !f.CenterSet {
+		return 0.5
 	}
+
+	return f.Center
+}
+
+func rankCandidates(eligible, columns string, filter PickFilter, args []any) (string, []any) {
 	// Экспоненциальная гонка даёт взвешенный случайный порядок без повторов.
 	sql := fmt.Sprintf(`WITH eligible AS MATERIALIZED (%s), scored AS (
         SELECT id,CASE WHEN $%d::boolean AND asked>$%d::bigint AND asked>0 THEN guessed::double precision/asked
@@ -100,35 +93,12 @@ func rankCandidates(eligible, columns string, filter PickFilter, args []any) (st
         ORDER BY -ln(GREATEST(random(),1e-15))/exp(-0.5*power((r.pos-$%d::double precision*r.n)/(0.15*r.n),2))`,
 		eligible, len(args)+1, len(args)+2, columns, len(args)+3)
 
-	return sql, append(args, filter.GuessRateEnabled, filter.AskedThreshold, center)
+	return sql, append(args, filter.GuessRateEnabled, filter.AskedThreshold, filter.center())
 }
 
 const finishedAudio = `SELECT d FROM track_to_download td JOIN downloads d ON d.id=td.download_id
     WHERE td.track_id=t.id AND d.status='finished' AND d.file_type='mp3'
     AND (d.meta->>'duration_seconds')::double precision>0`
-
-// PickTrack выбирает готовый трек для заданного исполнителя.
-func (r PackRepository) PickTrack(
-	ctx context.Context, c domain.Candidate, filter PickFilter,
-) (domain.Candidate, error) {
-	// Треки ранжируются по прослушиваниям; общая настройка угадываемости
-	// продолжает применяться при выборе исполнителей и альбомов.
-	filter.GuessRateEnabled = false
-	sql, args := rankCandidates(`SELECT t.*,to_jsonb(al) AS album,to_jsonb(sound.d) AS sound
-        FROM catalog_tracks t LEFT JOIN catalog_albums al ON al.id=t.album_id
-        JOIN LATERAL (`+finishedAudio+`
-            ORDER BY d.preview,(d.source_type='upload') DESC,
-            CASE WHEN d.source_type='upload' THEN d.created_at END DESC,d.created_at,d.id LIMIT 1) sound ON true
-		WHERE t.artist_id=$1 AND NOT t.excluded_from_quiz AND ($2<>'track_vowels' OR quiz_title_has_consonant(t.name))`,
-		"to_jsonb(e)-'album'-'sound',COALESCE(e.album,'{}'::jsonb),e.sound", filter, []any{c.Artist.ID, filter.Kind})
-
-	err := r.db.QueryRow(ctx, sql+" LIMIT 1", args...).Scan(&c.Track, &c.Album, &c.Sound)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return c, domain.ErrNotFound
-	}
-
-	return c, err
-}
 
 // Create атомарно сохраняется вызывающим Unit of Work вместе с раундами.
 func (r PackRepository) Create(ctx context.Context, p domain.QuizPack) error {

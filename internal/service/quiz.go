@@ -135,9 +135,18 @@ type packRounds struct {
 
 func buildPack(ctx context.Context, tx *store.UnitOfWork, p *domain.QuizPack, input packRounds) error {
 	used := []uuid.UUID{}
+	var audio []store.AudioTrack
 	for _, kind := range selectRoundTypes(input.kinds, input.count) {
+		if audio == nil && (store.PickFilter{Kind: kind}).UsesAudio() {
+			var err error
+			audio, err = tx.Packs.AudioTracks(ctx, input.tag)
+			if err != nil {
+				return err
+			}
+		}
+
 		round, err := buildRound(ctx, tx, roundInput{
-			Kind: kind, Tag: input.tag, Used: used, Pack: *p, Settings: input.settings,
+			Kind: kind, Tag: input.tag, Used: used, Pack: *p, Settings: input.settings, Audio: audio,
 		})
 		if errors.Is(err, domain.ErrNotFound) {
 			return fmt.Errorf("%w: недостаточно исполнителей для раунда %s", domain.ErrInsufficient, kind)
@@ -182,6 +191,7 @@ type roundInput struct {
 	Used     []uuid.UUID
 	Pack     domain.QuizPack
 	Settings domain.Settings
+	Audio    []store.AudioTrack
 }
 
 func (in roundInput) pickFilter() store.PickFilter {
@@ -212,7 +222,13 @@ func buildRound(ctx context.Context, tx *store.UnitOfWork, in roundInput) (domai
 	used := append([]uuid.UUID{}, in.Used...)
 
 	for i := range roundSize {
-		c, err := tx.Packs.Pick(ctx, used, filter)
+		var c domain.Candidate
+		var err error
+		if filter.UsesAudio() {
+			c, err = tx.Packs.PickAudio(ctx, in.Audio, used, filter)
+		} else {
+			c, err = tx.Packs.Pick(ctx, used, filter)
+		}
 		if err != nil {
 			return r, err
 		}

@@ -96,7 +96,7 @@ func checkSelectedRound(t *testing.T, pack domain.QuizPack, kind string) {
 			continue
 		}
 
-		if (kind == "artist_cities" || kind == "artist_alphabet") && q.SecondaryText != "" {
+		if q.SecondaryText != "" {
 			t.Fatalf("лишняя подсказка в раунде %s: %q", kind, q.SecondaryText)
 		}
 
