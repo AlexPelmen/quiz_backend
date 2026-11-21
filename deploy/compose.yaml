@@ -1,0 +1,61 @@
+name: music-quiz
+
+services:
+  db:
+    image: postgres:17
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: quiz
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in app.env}
+      POSTGRES_DB: quiz
+    ports:
+      - "127.0.0.1:15432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD", "pg_isready", "-h", "127.0.0.1", "-U", "quiz", "-d", "quiz"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  api:
+    image: music-quiz-api:${API_REVISION:?Set API_REVISION in images.env}
+    pull_policy: never
+    restart: unless-stopped
+    env_file: app.env
+    environment:
+      DATABASE_URL: postgres://quiz@db:5432/quiz?sslmode=disable
+      PGPASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in app.env}
+      HTTP_ADDR: 0.0.0.0:8080
+      AUTH_COOKIE_SECURE: "true"
+    ports:
+      - "127.0.0.1:8080:8080"
+    depends_on:
+      db:
+        condition: service_healthy
+    volumes:
+      - ./media:/app/data
+    stop_grace_period: 30s
+
+  frontend:
+    image: music-quiz-frontend:${FRONTEND_REVISION:?Set FRONTEND_REVISION in images.env}
+    pull_policy: never
+    restart: unless-stopped
+    environment:
+      API_UPSTREAM: api:8080
+    ports:
+      - "127.0.0.1:3000:80"
+
+  proxy:
+    image: caddy:2.11-alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+
+volumes:
+  postgres_data:
+  caddy_data:

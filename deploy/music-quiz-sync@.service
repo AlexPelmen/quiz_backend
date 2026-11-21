@@ -1,0 +1,11 @@
+[Unit]
+Description=Deploy Music Quiz %i after a successful GitHub Actions run
+Wants=network-online.target
+After=network-online.target docker.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+Environment=GIT_TERMINAL_PROMPT=0
+ExecStart=/usr/local/sbin/music-quiz-sync %i
+TimeoutStartSec=25min

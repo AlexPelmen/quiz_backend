@@ -6,6 +6,8 @@ Go + Gin + PostgreSQL. Сервис хранит музыкальный ката
 
 ## Запуск
 
+Деплой из `master` и подключение к PostgreSQL стенда описаны в [deploy/README.md](deploy/README.md).
+
 Для запуска нужен Docker Desktop с Linux-контейнерами. Для операций Genius добавьте токен из https://genius.com/api-clients.
 
 ```powershell

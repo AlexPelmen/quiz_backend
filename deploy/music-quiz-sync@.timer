@@ -1,0 +1,10 @@
+[Unit]
+Description=Check for Music Quiz %i updates
+
+[Timer]
+OnBootSec=15s
+OnUnitInactiveSec=2min
+AccuracySec=10s
+
+[Install]
+WantedBy=timers.target
