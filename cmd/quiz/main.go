@@ -18,6 +18,7 @@ import (
 	"devkeeper.com/quiz/internal/auth"
 	"devkeeper.com/quiz/internal/httpapi"
 	"devkeeper.com/quiz/internal/logbuffer"
+	"devkeeper.com/quiz/internal/objectstorage"
 	"devkeeper.com/quiz/internal/service"
 	"devkeeper.com/quiz/internal/store"
 )
@@ -54,6 +55,31 @@ func run(logger *slog.Logger, logs *logbuffer.Buffer) error {
 	}
 
 	app := service.New(uow, logger, os.Getenv("GENIUS_ACCESS_TOKEN"))
+
+	switch os.Getenv("QUIZ_STORAGE") {
+	case "", "local":
+		migrated, err := uow.Downloads.HasObjectLocations(ctx)
+		if err != nil {
+			return err
+		}
+
+		if migrated {
+			return errors.New("в каталоге есть ссылки S3, задайте QUIZ_STORAGE=s3 или восстановите локальные ссылки")
+		}
+	case "s3":
+		bucket, err := objectstorage.FromEnv()
+		if err != nil {
+			return err
+		}
+
+		if err := checkObjectStorage(ctx, uow, bucket); err != nil {
+			return err
+		}
+
+		app.UseObjectStorage(bucket)
+	default:
+		return errors.New("QUIZ_STORAGE должен быть local или s3")
+	}
 	authorization, err := auth.New(pool)
 	if err != nil {
 		return err
@@ -72,6 +98,26 @@ func run(logger *slog.Logger, logs *logbuffer.Buffer) error {
 	}
 
 	return serve(ctx, server, app, logger)
+}
+
+func checkObjectStorage(ctx context.Context, uow *store.UnitOfWork, bucket *objectstorage.Bucket) error {
+	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+
+	if err := bucket.Check(ctx); err != nil {
+		return err
+	}
+
+	incompatible, err := uow.Downloads.CountOutsideStorage(ctx, bucket.URI(""))
+	if err != nil {
+		return err
+	}
+
+	if incompatible != 0 {
+		return fmt.Errorf("%d ссылок на файлы ещё указывают вне настроенного бакета, сначала выполните перенос", incompatible)
+	}
+
+	return nil
 }
 
 func initialize(ctx context.Context, uow *store.UnitOfWork) error {

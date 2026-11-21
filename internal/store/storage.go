@@ -2,10 +2,56 @@ package store
 
 import (
 	"context"
+	"errors"
+	"fmt"
+	"time"
+
+	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 
 	"devkeeper.com/quiz/internal/domain"
-	"github.com/google/uuid"
 )
+
+// WithStorageLock удерживает блокировку ссылки между короткими транзакциями и операциями S3.
+func (u *UnitOfWork) WithStorageLock(ctx context.Context, uri string, fn func(*UnitOfWork) error) (result error) {
+	conn, err := u.pool.Acquire(ctx)
+	if err != nil {
+		return err
+	}
+	defer conn.Release()
+
+	var locked bool
+
+	err = conn.QueryRow(ctx, "SELECT pg_try_advisory_lock(hashtextextended($1,0))", uri).Scan(&locked)
+	if err != nil {
+		return errors.Join(err, closeStorageConn(ctx, conn.Hijack()))
+	}
+
+	if !locked {
+		return fmt.Errorf("%w: файл уже обрабатывается", domain.ErrConflict)
+	}
+
+	defer func() {
+		cleanup, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+		defer cancel()
+
+		if _, err := conn.Exec(cleanup, "SELECT pg_advisory_unlock(hashtextextended($1,0))", uri); err != nil {
+			result = errors.Join(result, err, closeStorageConn(ctx, conn.Hijack()))
+		}
+	}()
+
+	lockedUOW := bind(conn)
+	lockedUOW.begin = conn.BeginTx
+
+	return fn(lockedUOW)
+}
+
+func closeStorageConn(ctx context.Context, conn *pgx.Conn) error {
+	cleanup, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+	defer cancel()
+
+	return conn.Close(cleanup)
+}
 
 // StorageCandidate описывает объект каталога для сопоставления файла.
 type StorageCandidate struct {
@@ -55,6 +101,58 @@ func (r AlbumRepository) SetCoverIfEmpty(ctx context.Context, id, downloadID uui
 type StoredReference struct {
 	URI  string `db:"uri"`
 	Used bool   `db:"used"`
+}
+
+// HasObjectLocations проверяет, что каталог уже использует ссылки S3.
+func (r DownloadRepository) HasObjectLocations(ctx context.Context) (bool, error) {
+	var exists bool
+
+	err := r.db.QueryRow(ctx, "SELECT EXISTS(SELECT 1 FROM downloads WHERE starts_with(uri, 's3://'))").Scan(&exists)
+
+	return exists, err
+}
+
+// CountOutsideStorage считает сохранённые ссылки вне заданного хранилища.
+func (r DownloadRepository) CountOutsideStorage(ctx context.Context, prefix string) (int, error) {
+	var count int
+
+	err := r.db.QueryRow(ctx, `
+		SELECT count(*) FROM downloads WHERE uri<>'' AND NOT starts_with(uri, $1)`, prefix).Scan(&count)
+
+	return count, err
+}
+
+// ReplaceMediaLocations атомарно заменяет проверенные ссылки при остановленных работниках.
+func (u *UnitOfWork) ReplaceMediaLocations(
+	ctx context.Context, mapping map[string]string, prefix string, expected int,
+) error {
+	oldURIs, newURIs := make([]string, 0, len(mapping)), make([]string, 0, len(mapping))
+	for oldURI, newURI := range mapping {
+		oldURIs, newURIs = append(oldURIs, oldURI), append(newURIs, newURI)
+	}
+
+	return u.Transaction(ctx, func(tx *UnitOfWork) error {
+		if _, err := tx.db.Exec(ctx, "LOCK TABLE downloads IN SHARE ROW EXCLUSIVE MODE"); err != nil {
+			return err
+		}
+
+		tag, err := tx.db.Exec(ctx, `UPDATE downloads AS d SET uri=m.new_uri
+			FROM unnest($1::text[], $2::text[]) AS m(old_uri, new_uri) WHERE d.uri=m.old_uri`, oldURIs, newURIs)
+		if err != nil {
+			return err
+		}
+
+		outside, err := tx.Downloads.CountOutsideStorage(ctx, prefix)
+		if err != nil {
+			return err
+		}
+
+		if outside != 0 || tag.RowsAffected() != int64(expected) {
+			return errors.New("состав ссылок изменился после проверки, изменения отменены")
+		}
+
+		return nil
+	})
 }
 
 // DownloadNames возвращает названия объекта и исполнителя, связанных с загрузкой.

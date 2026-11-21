@@ -5,11 +5,13 @@ import (
 	"errors"
 	"io/fs"
 	"os"
+	"path"
 	"path/filepath"
 	"strings"
 
-	"devkeeper.com/quiz/internal/store"
 	"github.com/google/uuid"
+
+	"devkeeper.com/quiz/internal/store"
 )
 
 // StorageSize содержит число файлов и их размер в байтах.
@@ -42,17 +44,43 @@ func (a *App) StorageReport(ctx context.Context) (StorageReport, error) {
 	if err != nil {
 		return StorageReport{}, err
 	}
+
+	if a.objects != nil {
+		return a.objectStorageReport(ctx, refs, questions)
+	}
 	return scanStorage(ctx, settings.StorageDir, refs, questions)
 }
 
+func (a *App) objectStorageReport(
+	ctx context.Context, refs []store.StoredReference, questions []uuid.UUID,
+) (StorageReport, error) {
+	report := newStorageReport()
+	used := make(map[string]bool, len(refs))
+
+	for _, ref := range refs {
+		key, err := a.objects.Key(ref.URI)
+		if err != nil {
+			return report, err
+		}
+
+		used[key] = used[key] || ref.Used
+	}
+
+	questionIDs := storageQuestionIDs(questions)
+	err := a.objects.List(ctx, func(key string, size int64) {
+		report.addFile(key, size, used[key], questionIDs)
+	})
+
+	return report, err
+}
+
 func scanStorage(ctx context.Context, directory string, refs []store.StoredReference, questions []uuid.UUID) (StorageReport, error) {
-	report := StorageReport{Kinds: map[string]StorageSize{}, Orphans: []StorageFile{}}
+	report := newStorageReport()
 	root, err := filepath.Abs(directory)
 	if err != nil {
 		return report, err
 	}
 	used := make(map[string]bool, len(refs)+len(questions))
-	questionIDs := make(map[string]bool, len(questions))
 	for _, ref := range refs {
 		path, err := filepath.Abs(ref.URI)
 		if err != nil {
@@ -60,10 +88,8 @@ func scanStorage(ctx context.Context, directory string, refs []store.StoredRefer
 		}
 		used[filepath.Clean(path)] = used[filepath.Clean(path)] || ref.Used
 	}
-	for _, id := range questions {
-		questionIDs[id.String()] = true
-		used[filepath.Join(root, "music", "clips", id.String()+".mp3")] = true
-	}
+
+	questionIDs := storageQuestionIDs(questions)
 	err = filepath.WalkDir(root, func(path string, entry fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
 			if path == root && errors.Is(walkErr, os.ErrNotExist) {
@@ -91,31 +117,54 @@ func scanStorage(ctx context.Context, directory string, refs []store.StoredRefer
 		if err != nil {
 			return err
 		}
-		rel = filepath.ToSlash(rel)
-		kind := "other"
-		for prefix, label := range map[string]string{"music/tracks/": "tracks", "music/clips/": "clips", "images/albums/": "albums", "images/artists/": "artists", "images/quiz-packs/": "packs"} {
-			if strings.HasPrefix(rel, prefix) {
-				kind = label
-				break
-			}
-		}
-		item := report.Kinds[kind]
-		item.Count++
-		item.Bytes += info.Size()
-		report.Kinds[kind] = item
-		report.Total.Count++
-		report.Total.Bytes += info.Size()
-		clipUsed := false
-		if kind == "clips" {
-			base := strings.TrimSuffix(entry.Name(), filepath.Ext(entry.Name()))
-			if len(base) >= 36 {
-				clipUsed = questionIDs[base[len(base)-36:]]
-			}
-		}
-		if !used[filepath.Clean(path)] && !clipUsed {
-			report.Orphans = append(report.Orphans, StorageFile{Path: rel, Size: info.Size(), Kind: kind})
-		}
+
+		report.addFile(filepath.ToSlash(rel), info.Size(), used[filepath.Clean(path)], questionIDs)
 		return nil
 	})
 	return report, err
+}
+
+func newStorageReport() StorageReport {
+	return StorageReport{Kinds: map[string]StorageSize{}, Orphans: []StorageFile{}}
+}
+
+func storageQuestionIDs(questions []uuid.UUID) map[string]bool {
+	ids := make(map[string]bool, len(questions))
+	for _, id := range questions {
+		ids[id.String()] = true
+	}
+
+	return ids
+}
+
+func (r *StorageReport) addFile(key string, size int64, used bool, questionIDs map[string]bool) {
+	kind := "other"
+
+	for prefix, label := range map[string]string{
+		"music/tracks/": "tracks", "music/clips/": "clips",
+		"images/albums/": "albums", "images/artists/": "artists", "images/quiz-packs/": "packs",
+	} {
+		if strings.HasPrefix(key, prefix) {
+			kind = label
+			break
+		}
+	}
+
+	if kind == "clips" {
+		base := strings.TrimSuffix(path.Base(key), path.Ext(key))
+		if len(base) >= 36 {
+			used = used || questionIDs[base[len(base)-36:]]
+		}
+	}
+
+	item := r.Kinds[kind]
+	item.Count++
+	item.Bytes += size
+	r.Kinds[kind] = item
+	r.Total.Count++
+
+	r.Total.Bytes += size
+	if !used {
+		r.Orphans = append(r.Orphans, StorageFile{Path: key, Size: size, Kind: kind})
+	}
 }

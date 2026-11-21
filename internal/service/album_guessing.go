@@ -13,6 +13,7 @@ import (
 	"image/png"
 	"io"
 	"os"
+	"path/filepath"
 
 	"github.com/google/uuid"
 	_ "golang.org/x/image/bmp"
@@ -134,6 +135,30 @@ func (a *App) readCover(ctx context.Context, id uuid.UUID) (image.Image, error) 
 	path, err := a.DownloadPath(ctx, id)
 	if err != nil {
 		return nil, err
+	}
+
+	if a.objects != nil {
+		key, err := a.objects.Key(path)
+		if err != nil {
+			return nil, err
+		}
+
+		settings, err := a.Settings(ctx)
+		if err != nil {
+			return nil, err
+		}
+
+		work, err := os.MkdirTemp("", "quiz-cover-")
+		if err != nil {
+			return nil, err
+		}
+
+		defer a.removeWork(ctx, work)
+
+		path = filepath.Join(work, "cover")
+		if err := a.objects.SaveLocal(ctx, key, path, settings.MaxDownloadBytes); err != nil {
+			return nil, err
+		}
 	}
 
 	file, err := os.Open(path)

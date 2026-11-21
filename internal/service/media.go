@@ -251,14 +251,20 @@ func convertMP3(ctx context.Context, s domain.Settings, input string, output dom
 	return err
 }
 
-func downloadFile(ctx context.Context, s domain.Settings, d *domain.Download, directory string) (result error) {
-	root, err := filepath.Abs(s.StorageDir)
-	if err != nil {
-		return err
-	}
+func (a *App) downloadFile(ctx context.Context, s domain.Settings, d *domain.Download, directory string) error {
+	var root string
 
-	if err := os.MkdirAll(root, 0o750); err != nil {
-		return err
+	if a.objects == nil {
+		var err error
+
+		root, err = filepath.Abs(s.StorageDir)
+		if err != nil {
+			return err
+		}
+
+		if err := os.MkdirAll(root, 0o750); err != nil {
+			return err
+		}
 	}
 
 	work, err := os.MkdirTemp(root, ".download-")
@@ -266,7 +272,34 @@ func downloadFile(ctx context.Context, s domain.Settings, d *domain.Download, di
 		return err
 	}
 
-	defer func() { result = errors.Join(result, os.RemoveAll(work)) }()
+	defer a.removeWork(ctx, work)
+
+	input, err := prepareMedia(ctx, s, d, work)
+	if err != nil {
+		return err
+	}
+
+	name := mediaName(tagValue(d.Meta, "artist"), tagValue(d.Meta, "title"), d.Preview)
+	if a.objects != nil {
+		// Каждая попытка получает собственный ключ, даже если фиксация предыдущей прервалась.
+		key := mediaObjectKey(directory, name, d.FileType, uuid.New())
+		d.URI, err = a.publishObject(ctx, key, input)
+
+		return err
+	}
+
+	targetDir := filepath.Join(root, filepath.FromSlash(directory))
+	if err := os.MkdirAll(targetDir, 0o750); err != nil {
+		return err
+	}
+
+	d.URI, err = linkMediaFile(input, targetDir, name, d.FileType, d.ID)
+
+	return err
+}
+
+func prepareMedia(ctx context.Context, s domain.Settings, d *domain.Download, work string) (string, error) {
+	var err error
 
 	input := filepath.Join(work, "input")
 	if d.SourceType == "youtube" {
@@ -276,28 +309,28 @@ func downloadFile(ctx context.Context, s domain.Settings, d *domain.Download, di
 	}
 
 	if err != nil {
-		return err
+		return "", err
 	}
 
 	if err := checkSize(input, s.MaxDownloadBytes); err != nil {
-		return err
+		return "", err
 	}
 
 	if d.FileType == "mp3" {
 		d.URI = filepath.Join(work, "result.mp3")
 		if err := convertMP3(ctx, s, input, *d); err != nil {
-			return err
+			return "", err
 		}
 
 		duration, err := probe(ctx, s.FFprobe, d.URI)
 		if err != nil {
-			return err
+			return "", err
 		}
 
 		if d.Downloader == "hitmo" {
 			expected, ok := d.Meta["expected_duration_seconds"].(int)
 			if !ok || math.Abs(math.Round(duration)-float64(expected)) > 1 {
-				return fmt.Errorf("%w: длительность скачанного файла Hitmo не совпала", domain.ErrInvalid)
+				return "", fmt.Errorf("%w: длительность скачанного файла Hitmo не совпала", domain.ErrInvalid)
 			}
 
 			delete(d.Meta, "expected_duration_seconds")
@@ -308,29 +341,17 @@ func downloadFile(ctx context.Context, s domain.Settings, d *domain.Download, di
 	} else {
 		kind, err := checkImage(input)
 		if err != nil {
-			return err
+			return "", err
 		}
 
 		d.FileType = kind
 	}
 
 	if err := checkSize(input, s.MaxDownloadBytes); err != nil {
-		return err
+		return "", err
 	}
 
-	targetDir := filepath.Join(root, filepath.FromSlash(directory))
-	if err := os.MkdirAll(targetDir, 0o750); err != nil {
-		return err
-	}
-
-	path, err := linkMediaFile(input, targetDir, mediaName(tagValue(d.Meta, "artist"), tagValue(d.Meta, "title"), d.Preview), d.FileType, d.ID)
-	if err != nil {
-		return err
-	}
-
-	d.URI = path
-
-	return nil
+	return input, nil
 }
 
 func checkSize(path string, maxBytes int64) error {
@@ -409,7 +430,13 @@ func (a *App) Audio(ctx context.Context, packID uuid.UUID, number int) (string, 
 	if err != nil {
 		return "", err
 	}
-	return a.media.clip(ctx, s, clipInput{Question: q, Download: d, Artist: artist.Name, Title: track.Name})
+
+	in := clipInput{Question: q, Download: d, Artist: artist.Name, Title: track.Name}
+	if a.objects != nil {
+		return a.objectClip(ctx, s, in)
+	}
+
+	return a.media.clip(ctx, s, in)
 }
 
 type clipInput struct {
@@ -453,15 +480,7 @@ func (m *Media) clip(ctx context.Context, s domain.Settings, in clipInput) (path
 	defer cancel()
 
 	tmp := filepath.Join(work, "clip.mp3")
-	// Перекодирование обеспечивает точную нарезку; копирование MP3-пакетов даёт неточные границы.
-	_, err = runCommand(ctx, s.FFmpeg, []string{
-		"-nostdin", "-hide_banner", "-loglevel", "error", "-y",
-		"-ss", strconv.FormatFloat(*q.TrackStartSec, 'f', 6, 64), "-i", d.URI,
-		"-t", strconv.FormatFloat(*q.TrackFinishSec-*q.TrackStartSec, 'f', 6, 64),
-		"-map", "0:a:0", "-vn", "-map_metadata", "-1", "-c:a", "libmp3lame", "-b:a", "192k",
-		"-metadata", fmt.Sprintf("title=Вопрос %d", q.Number), "-f", "mp3", tmp,
-	})
-	if err != nil {
+	if err := in.render(ctx, s.FFmpeg, d.URI, tmp); err != nil {
 		return "", err
 	}
 
@@ -475,7 +494,22 @@ func (m *Media) clip(ctx context.Context, s domain.Settings, in clipInput) (path
 	return path, nil
 }
 
-// DownloadPath разрешает выдачу только готовых файлов, адресованных по UUID.
+func (in clipInput) render(ctx context.Context, executable, input, output string) error {
+	q := in.Question
+
+	// Перекодирование обеспечивает точную нарезку; копирование MP3-пакетов даёт неточные границы.
+	_, err := runCommand(ctx, executable, []string{
+		"-nostdin", "-hide_banner", "-loglevel", "error", "-y",
+		"-ss", strconv.FormatFloat(*q.TrackStartSec, 'f', 6, 64), "-i", input,
+		"-t", strconv.FormatFloat(*q.TrackFinishSec-*q.TrackStartSec, 'f', 6, 64),
+		"-map", "0:a:0", "-vn", "-map_metadata", "-1", "-c:a", "libmp3lame", "-b:a", "192k",
+		"-metadata", fmt.Sprintf("title=Вопрос %d", q.Number), "-f", "mp3", output,
+	})
+
+	return err
+}
+
+// DownloadPath разрешает выдачу готового локального файла или объекта по UUID.
 func (a *App) DownloadPath(ctx context.Context, id uuid.UUID) (string, error) {
 	d, err := a.uow.Downloads.Get(ctx, id)
 	if err != nil {
@@ -486,7 +520,7 @@ func (a *App) DownloadPath(ctx context.Context, id uuid.UUID) (string, error) {
 		return "", domain.ErrNotFound
 	}
 
-	return d.URI, nil
+	return a.downloadLocation(d.URI)
 }
 
 // DownloadForm задаёт источник ручной загрузки либо оставляет прежний для повторной попытки.

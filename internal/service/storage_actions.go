@@ -5,13 +5,16 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path"
 	"path/filepath"
 	"strings"
 	"time"
 
-	"devkeeper.com/quiz/internal/domain"
-	"devkeeper.com/quiz/internal/store"
 	"github.com/google/uuid"
+
+	"devkeeper.com/quiz/internal/domain"
+	"devkeeper.com/quiz/internal/objectstorage"
+	"devkeeper.com/quiz/internal/store"
 )
 
 // StorageActionResult содержит результат обработки одного файла.
@@ -29,9 +32,13 @@ func (a *App) StorageAction(ctx context.Context, action string, paths []string) 
 	if err != nil {
 		return nil, err
 	}
-	root, err := filepath.Abs(settings.StorageDir)
-	if err != nil {
-		return nil, err
+
+	var root string
+	if a.objects == nil {
+		root, err = filepath.Abs(settings.StorageDir)
+		if err != nil {
+			return nil, err
+		}
 	}
 	result := make([]StorageActionResult, 0, len(paths))
 	seen := map[string]bool{}
@@ -41,7 +48,15 @@ func (a *App) StorageAction(ctx context.Context, action string, paths []string) 
 			row.Error = "Файл указан повторно"
 		} else {
 			seen[name] = true
-			if err := a.storageActionOne(ctx, root, name, action, settings); err != nil {
+
+			var err error
+			if a.objects != nil {
+				err = a.objectStorageAction(ctx, name, action, settings)
+			} else {
+				err = a.storageActionOne(ctx, root, name, action, settings)
+			}
+
+			if err != nil {
 				row.Error = err.Error()
 			}
 		}
@@ -105,21 +120,9 @@ func (a *App) storageActionOne(ctx context.Context, root, name, action string, s
 	}
 	fileType := ""
 	if action == "attach" {
-		fileType = strings.TrimPrefix(strings.ToLower(filepath.Ext(path)), ".")
-		if strings.HasPrefix(name, "music/") {
-			if fileType != "mp3" {
-				return fmt.Errorf("%w: требуется MP3", domain.ErrInvalid)
-			}
-			probeCtx, cancel := context.WithTimeout(ctx, time.Duration(settings.TaskTimeoutSeconds)*time.Second)
-			defer cancel()
-			if _, err := probe(probeCtx, settings.FFprobe, path); err != nil {
-				return fmt.Errorf("проверка аудио: %w", err)
-			}
-		} else {
-			fileType, err = checkImage(path)
-			if err != nil {
-				return fmt.Errorf("проверка изображения: %w", err)
-			}
+		fileType, err = validateStorageFile(ctx, name, path, settings)
+		if err != nil {
+			return err
 		}
 	}
 	var moved string
@@ -141,7 +144,14 @@ func (a *App) storageActionOne(ctx context.Context, root, name, action string, s
 			}
 		}
 		if action == "attach" {
-			return a.attachStorageFile(ctx, tx, root, path, downloads, fileType)
+			rel, err := filepath.Rel(root, path)
+			if err != nil {
+				return err
+			}
+
+			return a.attachStorageFile(ctx, tx, storageAttachment{
+				key: filepath.ToSlash(rel), uri: path, downloads: downloads, fileType: fileType,
+			})
 		}
 		moved = filepath.Join(filepath.Dir(path), ".orphan-"+uuid.NewString())
 		if err := os.Rename(path, moved); err != nil {
@@ -164,12 +174,120 @@ func (a *App) storageActionOne(ctx context.Context, root, name, action string, s
 	return nil
 }
 
-func (a *App) attachStorageFile(ctx context.Context, tx *store.UnitOfWork, root, path string, downloads []domain.Download, fileType string) error {
-	rel, err := filepath.Rel(root, path)
-	if err != nil {
-		return err
+func validateStorageFile(ctx context.Context, name, filename string, settings domain.Settings) (string, error) {
+	if strings.HasPrefix(name, "music/") {
+		if !strings.EqualFold(path.Ext(name), ".mp3") {
+			return "", fmt.Errorf("%w: требуется MP3", domain.ErrInvalid)
+		}
+
+		probeCtx, cancel := context.WithTimeout(ctx, time.Duration(settings.TaskTimeoutSeconds)*time.Second)
+		defer cancel()
+
+		if _, err := probe(probeCtx, settings.FFprobe, filename); err != nil {
+			return "", fmt.Errorf("проверка аудио: %w", err)
+		}
+
+		return "mp3", nil
 	}
-	rel = filepath.ToSlash(rel)
+
+	kind, err := checkImage(filename)
+	if err != nil {
+		return "", fmt.Errorf("проверка изображения: %w", err)
+	}
+
+	return kind, nil
+}
+
+func (a *App) objectStorageAction(ctx context.Context, key, action string, settings domain.Settings) error {
+	if !objectstorage.ValidKey(key) {
+		return domain.ErrInvalid
+	}
+
+	uri := a.objects.URI(key)
+
+	return a.uow.WithStorageLock(ctx, uri, func(locked *store.UnitOfWork) error {
+		fileType, err := a.checkObjectForAction(ctx, key, action, settings)
+		if err != nil {
+			return err
+		}
+
+		err = locked.Transaction(ctx, func(tx *store.UnitOfWork) error {
+			downloads, err := tx.Downloads.LockStorageURI(ctx, uri)
+			if err != nil {
+				return err
+			}
+
+			refs, questions, err := tx.Downloads.StorageReferences(ctx)
+			if err != nil {
+				return err
+			}
+
+			for _, ref := range refs {
+				if ref.Used && ref.URI == uri {
+					return fmt.Errorf("%w: файл уже используется", domain.ErrConflict)
+				}
+			}
+
+			if strings.HasPrefix(key, "music/clips/") {
+				base := strings.TrimSuffix(path.Base(key), path.Ext(key))
+				for _, id := range questions {
+					if strings.HasSuffix(base, id.String()) {
+						return fmt.Errorf("%w: файл уже используется", domain.ErrConflict)
+					}
+				}
+			}
+
+			for _, d := range downloads {
+				if d.Status != "finished" {
+					return fmt.Errorf("%w: загрузка ещё выполняется", domain.ErrConflict)
+				}
+			}
+
+			if action == "attach" {
+				return a.attachStorageFile(ctx, tx, storageAttachment{
+					key: key, uri: uri, downloads: downloads, fileType: fileType,
+				})
+			}
+
+			return tx.Downloads.DeleteStorageDownloads(ctx, uri)
+		})
+		if err != nil || action == "attach" {
+			return err
+		}
+
+		return a.objects.Delete(ctx, key)
+	})
+}
+
+func (a *App) checkObjectForAction(ctx context.Context, key, action string, settings domain.Settings) (string, error) {
+	if action == "delete" {
+		_, err := a.objects.Head(ctx, key)
+		return "", err
+	}
+
+	dir, err := os.MkdirTemp("", "quiz-attach-")
+	if err != nil {
+		return "", err
+	}
+
+	defer a.removeWork(ctx, dir)
+
+	filename := filepath.Join(dir, "media")
+	if err := a.objects.SaveLocal(ctx, key, filename, settings.MaxDownloadBytes); err != nil {
+		return "", err
+	}
+
+	return validateStorageFile(ctx, key, filename, settings)
+}
+
+type storageAttachment struct {
+	key, uri, fileType string
+	downloads          []domain.Download
+}
+
+func (a *App) attachStorageFile(ctx context.Context, tx *store.UnitOfWork, file storageAttachment) error {
+	rel, downloads := file.key, file.downloads
+
 	kind := ""
 	switch {
 	case strings.HasPrefix(rel, "music/tracks/"), strings.HasPrefix(rel, "music/clips/"):
@@ -184,7 +302,8 @@ func (a *App) attachStorageFile(ctx context.Context, tx *store.UnitOfWork, root,
 	if len(downloads) > 1 {
 		return fmt.Errorf("%w: несколько загрузок с одним путём", domain.ErrConflict)
 	}
-	base := strings.TrimSuffix(filepath.Base(path), filepath.Ext(path))
+
+	base := strings.TrimSuffix(path.Base(rel), path.Ext(rel))
 	if len(base) > 39 {
 		if _, err := uuid.Parse(base[len(base)-36:]); err == nil && strings.HasSuffix(base[:len(base)-36], " - ") {
 			base = base[:len(base)-39]
@@ -221,7 +340,9 @@ func (a *App) attachStorageFile(ctx context.Context, tx *store.UnitOfWork, root,
 	if len(downloads) == 1 {
 		d = downloads[0]
 	} else {
-		d, err = tx.Downloads.SaveUpload(ctx, domain.Download{ID: uuid.New(), URI: path, FileType: fileType, Meta: map[string]any{}})
+		d, err = tx.Downloads.SaveUpload(ctx, domain.Download{
+			ID: uuid.New(), URI: file.uri, FileType: file.fileType, Meta: map[string]any{},
+		})
 		if err != nil {
 			return err
 		}

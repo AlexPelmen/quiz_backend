@@ -2,7 +2,6 @@ name: quiz
 services:
   db:
     image: postgres:17
-    env_file: .env
     environment:
       POSTGRES_USER: quiz
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-quiz}

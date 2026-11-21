@@ -72,7 +72,7 @@ func (a *App) Generate(ctx context.Context, f PackForm, cover io.Reader) (domain
 	var image domain.Download
 
 	if cover != nil {
-		image, err = stageUpload(ctx, settings, "quiz-packs", cover)
+		image, err = a.stageMediaUpload(ctx, settings, mediaUpload{resource: "quiz-packs", body: cover})
 		if err != nil {
 			return p, err
 		}

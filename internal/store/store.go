@@ -29,6 +29,7 @@ type DB interface {
 type UnitOfWork struct {
 	db        DB
 	pool      *pgxpool.Pool
+	begin     func(context.Context, pgx.TxOptions) (pgx.Tx, error)
 	Artists   ArtistRepository
 	Albums    AlbumRepository
 	Tracks    TrackRepository
@@ -44,6 +45,7 @@ type UnitOfWork struct {
 func New(pool *pgxpool.Pool) *UnitOfWork {
 	u := bind(pool)
 	u.pool = pool
+	u.begin = pool.BeginTx
 
 	return u
 }
@@ -72,11 +74,11 @@ func (u *UnitOfWork) transaction(
 	options pgx.TxOptions,
 	fn func(*UnitOfWork) error,
 ) (result error) {
-	if u.pool == nil {
+	if u.begin == nil {
 		return errors.New("вложенная транзакция не поддерживается")
 	}
 
-	tx, err := u.pool.BeginTx(ctx, options)
+	tx, err := u.begin(ctx, options)
 	if err != nil {
 		return err
 	}

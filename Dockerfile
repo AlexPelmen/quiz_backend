@@ -5,6 +5,7 @@ RUN go mod download
 COPY . .
 RUN CGO_ENABLED=0 go build -trimpath -o /out/quiz ./cmd/quiz
 RUN CGO_ENABLED=0 go build -trimpath -o /out/create-admin ./cmd/create-admin
+RUN CGO_ENABLED=0 go build -trimpath -o /out/migrate-media ./cmd/migrate-media
 
 FROM build AS test
 RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg \
@@ -23,6 +24,7 @@ ENV PATH="/opt/tools/bin:${PATH}" HTTP_ADDR="0.0.0.0:8080"
 WORKDIR /app
 COPY --from=build /out/quiz /app/quiz
 COPY --from=build /out/create-admin /app/create-admin
+COPY --from=build /out/migrate-media /app/migrate-media
 COPY --from=node:22-bookworm-slim /usr/local/bin/node /usr/local/bin/node
 USER quiz
 EXPOSE 8080

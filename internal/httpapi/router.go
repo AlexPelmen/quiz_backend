@@ -643,10 +643,6 @@ func (a *api) audio(c *gin.Context) {
 
 	path, err := a.app.Audio(c.Request.Context(), *id, number)
 	if err == nil {
-		_, err = os.Stat(path)
-	}
-
-	if err == nil {
 		c.Header("Content-Type", "audio/mpeg")
 		c.Header("Content-Disposition", "inline; filename=question-"+strconv.Itoa(number)+".mp3")
 	}
@@ -655,6 +651,10 @@ func (a *api) audio(c *gin.Context) {
 }
 
 func (a *api) serveFile(c *gin.Context, path string, err error) {
+	if err == nil && strings.HasPrefix(path, "s3://") {
+		a.serveObject(c, path)
+		return
+	}
 	if err == nil {
 		_, err = os.Stat(path)
 	}

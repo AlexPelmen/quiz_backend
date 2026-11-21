@@ -32,10 +32,6 @@ func (a *App) Upload(ctx context.Context, resource string, id uuid.UUID, input i
 	ctx, cancel := context.WithTimeout(ctx, time.Duration(settings.TaskTimeoutSeconds)*time.Second)
 	defer cancel()
 
-	d, err := stageUpload(ctx, settings, resource, input)
-	if err != nil {
-		return domain.Download{}, err
-	}
 	var artistName, title string
 	switch value := entity.(type) {
 	case domain.Artist:
@@ -43,25 +39,22 @@ func (a *App) Upload(ctx context.Context, resource string, id uuid.UUID, input i
 	case domain.Album:
 		artist, lookupErr := a.uow.Artists.Get(ctx, value.ArtistID)
 		if lookupErr != nil {
-			a.cleanupUpload(ctx, d)
 			return domain.Download{}, lookupErr
 		}
 		artistName, title = artist.Name, value.Name
 	case domain.TrackWithStatus:
 		artist, lookupErr := a.uow.Artists.Get(ctx, value.ArtistID)
 		if lookupErr != nil {
-			a.cleanupUpload(ctx, d)
 			return domain.Download{}, lookupErr
 		}
 		artistName, title = artist.Name, value.Name
 	}
-	if name := mediaName(artistName, title, false); name != "" {
-		path, renameErr := linkMediaFile(d.URI, filepath.Dir(d.URI), name, d.FileType, d.ID)
-		if renameErr != nil {
-			a.cleanupUpload(ctx, d)
-			return domain.Download{}, renameErr
-		}
-		d.URI = path
+
+	d, err := a.stageMediaUpload(ctx, settings, mediaUpload{
+		resource: resource, body: input, name: mediaName(artistName, title, false),
+	})
+	if err != nil {
+		return domain.Download{}, err
 	}
 
 	saved, err := a.saveUpload(ctx, resource, id, d)
@@ -198,7 +191,7 @@ func (a *App) cleanupUpload(ctx context.Context, d domain.Download) {
 		return
 	}
 
-	if err := os.Remove(d.URI); err != nil {
+	if err := a.removeMedia(ctx, d.URI); err != nil {
 		a.log.Error("удаление непривязанного файла", "download_id", d.ID, "error", err)
 	}
 }

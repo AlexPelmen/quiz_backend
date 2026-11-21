@@ -118,7 +118,7 @@ func (a *App) downloadNext(ctx context.Context, s domain.Settings) error {
 			}
 		}
 		if err == nil {
-			err = downloadFile(taskCtx, s, &resolved, directory)
+			err = a.downloadFile(taskCtx, s, &resolved, directory)
 			d.URI, d.Meta, d.Preview, d.FileType = resolved.URI, resolved.Meta, resolved.Preview, resolved.FileType
 		}
 	}

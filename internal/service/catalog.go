@@ -18,20 +18,27 @@ import (
 	"github.com/google/uuid"
 
 	"devkeeper.com/quiz/internal/domain"
+	"devkeeper.com/quiz/internal/objectstorage"
 	"devkeeper.com/quiz/internal/store"
 )
 
 // App объединяет сервисы одного процесса и их зависимости.
 type App struct {
-	uow   *store.UnitOfWork
-	log   *slog.Logger
-	token string
-	media *Media
+	uow     *store.UnitOfWork
+	log     *slog.Logger
+	token   string
+	media   *Media
+	objects *objectstorage.Bucket
 }
 
 // New собирает приложение; секрет Genius не попадает в настройки API.
 func New(uow *store.UnitOfWork, logger *slog.Logger, token string) *App {
 	return &App{uow: uow, log: logger, token: token, media: &Media{}}
+}
+
+// UseObjectStorage подключает S3 до запуска HTTP API и работников.
+func (a *App) UseObjectStorage(bucket *objectstorage.Bucket) {
+	a.objects = bucket
 }
 
 // Ready проверяет готовность подключения к хранилищу.
