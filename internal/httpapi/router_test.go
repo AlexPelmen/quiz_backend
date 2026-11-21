@@ -225,9 +225,13 @@ func testMultipleRounds(t *testing.T, pool *pgxpool.Pool, router http.Handler) {
 		t.Fatalf("ожидались два полных раунда: %d", len(pack.Rounds))
 	}
 
+	url := "/api/v1/quiz-packs/" + pack.ID.String()
 	used := map[uuid.UUID]bool{}
 
 	for _, round := range pack.Rounds {
+		if round.Type == "artist_by_cover" {
+			call("GET", fmt.Sprintf("%s/questions/%d/audio", url, round.Questions[0].Number), "", 404)
+		}
 		for _, q := range round.Questions {
 			if used[q.ArtistID] {
 				t.Fatal("исполнитель повторился между раундами")
@@ -236,9 +240,6 @@ func testMultipleRounds(t *testing.T, pool *pgxpool.Pool, router http.Handler) {
 			used[q.ArtistID] = true
 		}
 	}
-
-	url := "/api/v1/quiz-packs/" + pack.ID.String()
-	call("GET", url+"/questions/11/audio", "", 404)
 }
 
 func httpAudioFixture(t *testing.T) string {
