@@ -54,8 +54,9 @@ func (r PackRepository) Pick(ctx context.Context, excluded []uuid.UUID, filter P
 	case "artist_by_albums":
 		sql, args = rankCandidates(`SELECT DISTINCT ON (name) id,name,yt_plays,asked,guessed
             FROM catalog_albums WHERE artist_id=$1 AND NOT excluded_from_quiz AND strpos(lower(name),lower($2))=0
-            ORDER BY name,yt_plays DESC NULLS LAST,id`, "e.name", filter, []any{artist.ID, artist.Name})
-		err = r.db.QueryRow(ctx, "SELECT ARRAY("+sql+" LIMIT 10)", args...).Scan(&c.AlbumNames)
+            ORDER BY name,yt_plays DESC NULLS LAST,id`, "e.id,e.name", filter, []any{artist.ID, artist.Name})
+		err = r.db.QueryRow(ctx, "SELECT array_agg(name),array_agg(id) FROM ("+sql+" LIMIT 10) picked", args...).
+			Scan(&c.AlbumNames, &c.AlbumIDs)
 
 		return c, err
 	default:
@@ -125,23 +126,20 @@ func (r PackRepository) Create(ctx context.Context, p domain.QuizPack) error {
 }
 
 func (r PackRepository) createQuestion(ctx context.Context, q domain.Question) error {
-	return execute(ctx, r.db, `INSERT INTO quiz_questions(id,round_id,number,artist_id,track_id,album_id,
-		primary_text,secondary_text,image_download_id,sound_download_id,track_start_sec,track_finish_sec,
-		answer,answer_info,status)
-		VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,CASE WHEN $10::uuid IS NULL THEN 'ready' ELSE 'new' END)`,
-		[]any{
-			q.ID, q.RoundID, q.Number,
-			q.ArtistID, q.TrackID, q.AlbumID, q.PrimaryText, q.SecondaryText, q.ImageDownloadID, q.SoundDownloadID,
-			q.TrackStartSec, q.TrackFinishSec, q.Answer, q.AnswerInfo,
-		})
+	_, err := r.db.Exec(ctx, `WITH saved AS (
+		INSERT INTO quiz_questions(id,round_id,number,artist_id,track_id,album_id,primary_text,secondary_text,
+			image_download_id,sound_download_id,track_start_sec,track_finish_sec,answer,answer_info,status)
+		VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,CASE WHEN $10::uuid IS NULL THEN 'ready' ELSE 'new' END)
+		RETURNING id
+	) INSERT INTO quiz_question_album_refs(question_id,album_id)
+	SELECT saved.id,refs.id FROM saved CROSS JOIN unnest($15::uuid[]) AS refs(id)`,
+		q.ID, q.RoundID, q.Number, q.ArtistID, q.TrackID, q.AlbumID, q.PrimaryText, q.SecondaryText,
+		q.ImageDownloadID, q.SoundDownloadID, q.TrackStartSec, q.TrackFinishSec, q.Answer, q.AnswerInfo, q.AlbumRefs)
+
+	return translate(err)
 }
 
-const packWithClipCounts = `SELECT p.*, stats.clips_total, stats.clips_ready FROM quiz_packs p
-	CROSS JOIN LATERAL (
-		SELECT count(*) AS clips_total, count(*) FILTER (WHERE q.status='ready') AS clips_ready
-		FROM quiz_rounds r JOIN quiz_questions q ON q.round_id=r.id
-		WHERE r.pack_id=p.id AND q.sound_download_id IS NOT NULL
-	) stats`
+const packWithClipCounts = `SELECT * FROM quiz_pack_status p`
 
 // List возвращает пакеты без вложенных вопросов.
 func (r PackRepository) List(ctx context.Context, p domain.Page) ([]domain.QuizPack, error) {
@@ -178,8 +176,8 @@ func (r PackRepository) Question(
 	ctx context.Context, packID uuid.UUID, number int, readyOnly bool,
 ) (domain.Question, error) {
 	return one[domain.Question](ctx, r.db, `SELECT q.* FROM quiz_questions q JOIN quiz_rounds r ON r.id=q.round_id
-		JOIN quiz_packs p ON p.id=r.pack_id
-		WHERE r.pack_id=$1 AND q.number=$2 AND (NOT $3::boolean OR p.status='ready')`,
+		JOIN quiz_pack_status p ON p.id=r.pack_id
+		WHERE r.pack_id=$1 AND q.number=$2 AND NOT q.deleted AND (NOT $3::boolean OR p.status='ready')`,
 		[]any{packID, number, readyOnly})
 }
 

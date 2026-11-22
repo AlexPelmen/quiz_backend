@@ -67,7 +67,9 @@ type AlbumCleanupRow struct {
 
 const cleanupCandidates = `
     SELECT al.id,al.name AS album,a.name AS artist,
-        EXISTS(SELECT 1 FROM quiz_questions q WHERE q.album_id=al.id) AS protected
+        (EXISTS(SELECT 1 FROM quiz_questions q WHERE q.album_id=al.id)
+         OR EXISTS(SELECT 1 FROM quiz_question_album_refs ref JOIN quiz_questions q ON q.id=ref.question_id
+                   WHERE ref.album_id=al.id AND NOT q.deleted)) AS protected
     FROM artist_album_shortlists s
     JOIN artists a ON a.id=s.artist_id AND a.status='parsed'
     JOIN artist_to_album owner ON owner.artist_id=s.artist_id

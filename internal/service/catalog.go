@@ -113,7 +113,7 @@ func (a *App) TrackArtists(ctx context.Context, id uuid.UUID) ([]domain.Artist, 
 	return a.uow.Tracks.Artists(ctx, id)
 }
 
-// Delete удаляет объект каталога или пакет с проверкой ссылочной целостности в БД.
+// Delete удаляет объект каталога с очисткой связанных вопросов или удаляет пакет целиком.
 func (a *App) Delete(ctx context.Context, resource string, id uuid.UUID) error {
 	switch resource {
 	case "artists":

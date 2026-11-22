@@ -70,6 +70,15 @@ func TestCatalogMetricsMigration(t *testing.T) {
 	if _, err := pool.Exec(ctx, "INSERT INTO tracks(id,name) VALUES($1,'Без исполнителя')", uuid.New()); err == nil {
 		t.Fatal("создан трек без связи с исполнителем")
 	}
+
+	if err := uow.Albums.Delete(ctx, albums[0].ID); err != nil {
+		t.Fatal(err)
+	}
+
+	updated, err := uow.Packs.Get(ctx, pack.ID)
+	if err != nil || updated.Status != "ready" || !updated.Rounds[0].Questions[0].Deleted {
+		t.Fatalf("ссылка на альбом в старом вопросе: %+v %v", updated, err)
+	}
 }
 
 func TestAlbumSourcePlaysPrecedeLinkedTrackEstimate(t *testing.T) {
@@ -160,7 +169,7 @@ func seedLegacyCatalog(t *testing.T, pool *pgxpool.Pool) {
     INSERT INTO artists(id,name,status,points,guess_num) VALUES
         ('00000000-0000-0000-0000-000000000003','Artist','parsed',0,7);
     INSERT INTO albums(id,artist_id,name,points,guess_num) VALUES
-        ('00000000-0000-0000-0000-000000000004','00000000-0000-0000-0000-000000000003','Album',70.5,11);
+        ('00000000-0000-0000-0000-000000000004','00000000-0000-0000-0000-000000000003','Album (Edition)',70.5,11);
     INSERT INTO tracks(id,artist_id,album_id,name,points,guess_num) VALUES
         ('00000000-0000-0000-0000-000000000005','00000000-0000-0000-0000-000000000003',
          '00000000-0000-0000-0000-000000000004','Track',99,2);
@@ -171,10 +180,10 @@ func seedLegacyCatalog(t *testing.T, pool *pgxpool.Pool) {
     INSERT INTO quiz_rounds(id,pack_id,number,type) VALUES
         ('00000000-0000-0000-0000-000000000007','00000000-0000-0000-0000-000000000006',1,'artist_by_track');
     INSERT INTO quiz_questions(id,round_id,number,artist_id,track_id,primary_text,
-        sound_download_id,track_start_sec,track_finish_sec,answer) VALUES
+        sound_download_id,track_start_sec,track_finish_sec,answer,answer_info) VALUES
         ('00000000-0000-0000-0000-000000000008','00000000-0000-0000-0000-000000000007',1,
          '00000000-0000-0000-0000-000000000003','00000000-0000-0000-0000-000000000005','Track',
-         '00000000-0000-0000-0000-000000000001',0,20,'Artist');
+         '00000000-0000-0000-0000-000000000001',0,20,'Artist','{"album":"Album"}');
     INSERT INTO quiz_round_results(round_id,attempt_id,r,n,answers) VALUES
         ('00000000-0000-0000-0000-000000000007','00000000-0000-0000-0000-000000000009',1,1,ARRAY[true]);`
 

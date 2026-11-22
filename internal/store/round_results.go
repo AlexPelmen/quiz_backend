@@ -69,23 +69,30 @@ func (r PackRepository) SaveRoundResult(ctx context.Context, result RoundResult)
 
 // CountAnswer засчитывает вопрос исполнителю и при наличии треку или альбому.
 func (r PackRepository) CountAnswer(ctx context.Context, q domain.Question, correct bool) error {
-	const increment = " SET asked=asked+1,guessed=guessed+$2::integer,updated_at=now() WHERE id=$1"
+	if q.Deleted {
+		return nil
+	}
+
+	const increment = ` SET asked=asked+1,guessed=guessed+$2::integer,updated_at=now() WHERE id=$1
+		AND EXISTS (SELECT 1 FROM quiz_questions WHERE id=$3 AND NOT deleted)`
 
 	var guessed int
 	if correct {
 		guessed = 1
 	}
 
-	if err := execute(ctx, r.db, "UPDATE artists"+increment, []any{q.ArtistID, guessed}); err != nil {
-		return err
+	if _, err := r.db.Exec(ctx, "UPDATE artists"+increment, q.ArtistID, guessed, q.ID); err != nil {
+		return translate(err)
 	}
 
 	if q.TrackID != nil {
-		return execute(ctx, r.db, "UPDATE tracks"+increment, []any{*q.TrackID, guessed})
+		_, err := r.db.Exec(ctx, "UPDATE tracks"+increment, *q.TrackID, guessed, q.ID)
+		return translate(err)
 	}
 
 	if q.AlbumID != nil {
-		return execute(ctx, r.db, "UPDATE albums"+increment, []any{*q.AlbumID, guessed})
+		_, err := r.db.Exec(ctx, "UPDATE albums"+increment, *q.AlbumID, guessed, q.ID)
+		return translate(err)
 	}
 
 	return nil

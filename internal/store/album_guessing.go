@@ -65,7 +65,7 @@ func (r PackRepository) QuestionCover(
 ) (uuid.UUID, []domain.CoverRectangle, error) {
 	cover, err := one[guessingImage](ctx, r.db, `SELECT d.id AS cover_download_id,g.rectangles
 		FROM quiz_rounds qr JOIN quiz_questions q ON q.round_id=qr.id JOIN albums al ON al.id=q.album_id
-		JOIN quiz_packs p ON p.id=qr.pack_id `+approvedCover+`
+		JOIN quiz_pack_status p ON p.id=qr.pack_id `+approvedCover+`
 		WHERE qr.pack_id=$1 AND q.number=$2 AND qr.type='artist_by_cover'
 		AND (NOT $3::boolean OR p.status='ready')`, []any{packID, number, readyOnly})
 

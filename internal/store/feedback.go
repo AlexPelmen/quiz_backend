@@ -18,6 +18,7 @@ type FeedbackQuestion struct {
 	PackName        string     `json:"pack_name"`
 	Number          int        `json:"number"`
 	RoundType       string     `json:"round_type"`
+	Deleted         bool       `json:"deleted"`
 	PrimaryText     string     `json:"primary_text"`
 	Answer          string     `json:"answer"`
 	HasAudio        bool       `json:"has_audio"`
@@ -52,8 +53,11 @@ func (u *UnitOfWork) FeedbackQuestions(ctx context.Context, filter string, limit
 	if err := u.db.QueryRow(ctx, `SELECT count(*) `+feedbackQuestionsFrom, filter).Scan(&total); err != nil {
 		return nil, 0, err
 	}
-	rows, err := query[FeedbackQuestion](ctx, u.db, `SELECT q.id,p.id AS pack_id,p.name AS pack_name,q.number,r.type AS round_type,
- q.primary_text,q.answer,(q.sound_download_id IS NOT NULL) AS has_audio,q.image_download_id,f.reports,f.unread,f.likes `+feedbackQuestionsFrom+` ORDER BY q.created_at DESC,q.id DESC LIMIT $2 OFFSET $3`, []any{filter, limit, offset})
+
+	rows, err := query[FeedbackQuestion](ctx, u.db, `SELECT q.id,p.id AS pack_id,p.name AS pack_name,q.number,
+ r.type AS round_type,q.deleted,q.primary_text,q.answer,(q.sound_download_id IS NOT NULL) AS has_audio,
+ q.image_download_id,f.reports,f.unread,f.likes `+feedbackQuestionsFrom+`
+ ORDER BY q.created_at DESC,q.id DESC LIMIT $2 OFFSET $3`, []any{filter, limit, offset})
 	return rows, total, err
 }
 
@@ -66,13 +70,17 @@ func (u *UnitOfWork) QuestionReports(ctx context.Context, id uuid.UUID) ([]Feedb
 // AddQuestionReport сохраняет жалобу для существующего вопроса.
 func (u *UnitOfWork) AddQuestionReport(ctx context.Context, question, user uuid.UUID, kind, comment string) error {
 	return execute(ctx, u.db, `INSERT INTO question_feedback(id,question_id,user_id,type,comment)
- SELECT $1,id,$3,$4,$5 FROM quiz_questions WHERE id=$2`, []any{uuid.New(), question, user, kind, comment})
+ SELECT $1,id,$3,$4,$5 FROM quiz_questions WHERE id=$2 AND NOT deleted`,
+		[]any{uuid.New(), question, user, kind, comment})
 }
 
 // QuestionLiked возвращает состояние лайка текущего пользователя.
 func (u *UnitOfWork) QuestionLiked(ctx context.Context, question, user uuid.UUID) (bool, error) {
 	var liked bool
-	err := u.db.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM question_feedback WHERE question_id=q.id AND user_id=$2 AND type='like') FROM quiz_questions q WHERE q.id=$1`, question, user).Scan(&liked)
+
+	err := u.db.QueryRow(ctx, `SELECT EXISTS(
+ SELECT 1 FROM question_feedback WHERE question_id=q.id AND user_id=$2 AND type='like'
+ ) FROM quiz_questions q WHERE q.id=$1 AND NOT q.deleted`, question, user).Scan(&liked)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return false, domain.ErrNotFound
 	}
@@ -85,7 +93,8 @@ func (u *UnitOfWork) QuestionLiked(ctx context.Context, question, user uuid.UUID
 // SetQuestionLike устанавливает или снимает лайк пользователя.
 func (u *UnitOfWork) SetQuestionLike(ctx context.Context, question, user uuid.UUID, liked bool) error {
 	if liked {
-		return execute(ctx, u.db, `INSERT INTO question_feedback(id,question_id,user_id,type) SELECT $1,id,$3,'like' FROM quiz_questions WHERE id=$2
+		return execute(ctx, u.db, `INSERT INTO question_feedback(id,question_id,user_id,type)
+   SELECT $1,id,$3,'like' FROM quiz_questions WHERE id=$2 AND NOT deleted
    ON CONFLICT (question_id,user_id) WHERE type='like' DO UPDATE SET updated_at=question_feedback.updated_at`, []any{uuid.New(), question, user})
 	}
 	if _, err := u.QuestionLiked(ctx, question, user); err != nil {

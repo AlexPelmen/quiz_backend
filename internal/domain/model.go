@@ -173,9 +173,11 @@ type Question struct {
 	ID              uuid.UUID      `json:"id"`
 	RoundID         uuid.UUID      `json:"round_id"`
 	Number          int            `json:"number"`
-	ArtistID        uuid.UUID      `json:"artist_id"`
+	ArtistID        uuid.UUID      `json:"artist_id,omitzero"`
 	TrackID         *uuid.UUID     `json:"track_id"`
 	AlbumID         *uuid.UUID     `json:"-"`
+	AlbumRefs       []uuid.UUID    `json:"-" db:"-"`
+	Deleted         bool           `json:"deleted"`
 	PrimaryText     string         `json:"primary_text"`
 	SecondaryText   string         `json:"secondary_text"`
 	ImageDownloadID *uuid.UUID     `json:"image_download_id"`
@@ -186,6 +188,7 @@ type Question struct {
 	AnswerInfo      map[string]any `json:"answer_info"`
 	Status          string         `json:"status"`
 	ClipName        string         `json:"-"`
+	ClipError       string         `json:"-"`
 	ClipLeaseUntil  *time.Time     `json:"-"`
 	CreatedAt       time.Time      `json:"created_at"`
 	UpdatedAt       time.Time      `json:"updated_at"`
@@ -194,6 +197,7 @@ type Question struct {
 // Candidate содержит данные, необходимые обработчику раунда.
 type Candidate struct {
 	AlbumNames []string
+	AlbumIDs   []uuid.UUID
 	Artist     Artist
 	Album      Album
 	Track      Track

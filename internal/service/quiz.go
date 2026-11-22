@@ -277,10 +277,16 @@ func makeQuestion(kind string, c domain.Candidate) (domain.Question, error) {
 		return domain.Question{}, fmt.Errorf("%w: название после удаления скобок пустое", domain.ErrInvalid)
 	}
 	cleanAlbums := make([]string, 0, len(c.AlbumNames))
-	for _, name := range c.AlbumNames {
+	albumRefs := make([]uuid.UUID, 0, len(c.AlbumIDs))
+
+	for i, name := range c.AlbumNames {
 		name = cleanQuestionName(name)
 		if name != "" && !slices.Contains(cleanAlbums, name) {
 			cleanAlbums = append(cleanAlbums, name)
+
+			if i < len(c.AlbumIDs) {
+				albumRefs = append(albumRefs, c.AlbumIDs[i])
+			}
 		}
 	}
 	c.AlbumNames = cleanAlbums
@@ -294,6 +300,10 @@ func makeQuestion(kind string, c domain.Candidate) (domain.Question, error) {
 
 	if kind == "artist_by_cover" {
 		q.AlbumID = &c.Album.ID
+	}
+
+	if kind == "artist_by_albums" {
+		q.AlbumRefs = albumRefs
 	}
 
 	if kind == "artist_by_cover" || kind == "artist_by_logo" || kind == "artist_by_albums" {
@@ -311,6 +321,10 @@ func makeQuestion(kind string, c domain.Candidate) (domain.Question, error) {
 
 	start, finish := ClipBounds(duration, rand.Float64())
 	q.TrackID = &c.Track.ID
+
+	if c.Album.ID != uuid.Nil {
+		q.AlbumRefs = []uuid.UUID{c.Album.ID}
+	}
 	q.SoundDownloadID, q.TrackStartSec, q.TrackFinishSec = &c.Sound.ID, &start, &finish
 
 	return q, nil

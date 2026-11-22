@@ -434,7 +434,8 @@
         }
       },
       "delete": {
-        "summary": "Удалить Artist",
+        "summary": "Удалить исполнителя",
+        "description": "Очищает данные исполнителя и принадлежащие только ему альбомы и треки. Связанные вопросы получают deleted: true.",
         "responses": {
           "204": {
             "description": "Удалено"
@@ -874,7 +875,8 @@
         }
       },
       "delete": {
-        "summary": "Удалить Album",
+        "summary": "Удалить альбом",
+        "description": "Очищает данные альбома и отвязывает его от треков. Связанные вопросы получают deleted: true.",
         "responses": {
           "204": {
             "description": "Удалено"
@@ -1346,7 +1348,8 @@
         }
       },
       "delete": {
-        "summary": "Удалить Track",
+        "summary": "Удалить трек",
+        "description": "Очищает данные трека. Связанные вопросы получают deleted: true.",
         "responses": {
           "204": {
             "description": "Удалено"
@@ -2703,7 +2706,7 @@
     "/api/v1/quiz-rounds/{id}/results": {
       "post": {
         "summary": "Сохранить результат завершённого раунда",
-        "description": "Повтор с тем же attempt_id и теми же ответами не увеличивает счётчики второй раз.",
+        "description": "Повтор с тем же attempt_id и теми же ответами не увеличивает счётчики второй раз. Для вопросов с deleted: true передавайте false. Они сохраняют свои позиции и пропускаются при начислении счётчиков каталога.",
         "parameters": [
           {
             "name": "id",
@@ -4903,7 +4906,7 @@
         ],
         "responses": {
           "200": {
-            "description": "Объект с items и total"
+            "description": "Объект с items и total. Удалённые вопросы имеют deleted: true, текст «Вопрос был удалён» и пустой ответ."
           },
           "403": {
             "description": "Недостаточно прав"
@@ -5542,6 +5545,10 @@
         "type": "object",
         "properties": {
           "status": { "$ref": "#/components/schemas/QuizStatus" },
+          "deleted": {
+            "type": "boolean",
+            "description": "У удалённого вопроса сохранены UUID и номер, данные ответа и медиа очищены."
+          },
           "id": {
             "type": "string",
             "format": "uuid"
@@ -5557,7 +5564,8 @@
           },
           "artist_id": {
             "type": "string",
-            "format": "uuid"
+            "format": "uuid",
+            "description": "Присутствует у действующего вопроса."
           },
           "track_id": {
             "anyOf": [

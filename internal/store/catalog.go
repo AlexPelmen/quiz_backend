@@ -76,8 +76,13 @@ func (r ArtistRepository) Update(ctx context.Context, a domain.Artist) (domain.A
 	return r.Get(ctx, a.ID)
 }
 
-// Delete удаляет исполнителя и его каталог в транзакции вызывающего сервиса.
+// Delete архивирует идентификатор исполнителя и очищает его каталог в транзакции.
 func (r ArtistRepository) Delete(ctx context.Context, id uuid.UUID) error {
+	if _, err := one[struct{ ID uuid.UUID }](ctx, r.db,
+		"SELECT id FROM artists WHERE id=$1 FOR UPDATE", []any{id}); err != nil {
+		return err
+	}
+
 	for _, sql := range []string{
 		`SELECT t.id FROM tracks t JOIN artist_to_track owner ON owner.track_id=t.id
             WHERE owner.artist_id=$1 ORDER BY t.id FOR UPDATE OF t`,
@@ -330,7 +335,7 @@ func (r AlbumRepository) importAlbum(ctx context.Context, a domain.Album, fill b
 	return r.Get(ctx, id)
 }
 
-// Delete удаляет альбом, сохраняя треки без привязки к нему.
+// Delete архивирует идентификатор альбома, сохраняя треки без привязки к нему.
 func (r AlbumRepository) Delete(ctx context.Context, id uuid.UUID) error {
 	return execute(ctx, r.db, "DELETE FROM albums WHERE id=$1", []any{id})
 }
@@ -497,7 +502,7 @@ func (r TrackRepository) importTrack(ctx context.Context, t domain.Track, fallba
 	return saved, previous, err
 }
 
-// Delete удаляет трек, если он не используется сохранённым пакетом.
+// Delete архивирует идентификатор трека и очищает его данные.
 func (r TrackRepository) Delete(ctx context.Context, id uuid.UUID) error {
 	return execute(ctx, r.db, "DELETE FROM tracks WHERE id=$1", []any{id})
 }

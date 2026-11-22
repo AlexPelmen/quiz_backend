@@ -24,9 +24,9 @@ func (u *UnitOfWork) ClaimQuizClip(ctx context.Context, seconds int) (QuizClipTa
 
 	err := u.transaction(ctx, pgx.TxOptions{IsoLevel: pgx.ReadCommitted}, func(tx *UnitOfWork) error {
 		pack, err := one[struct{ ID uuid.UUID }](ctx, tx.db, `SELECT p.id FROM quiz_packs p
-			WHERE p.status<>'ready' AND p.clip_error=''
+			WHERE p.status<>'ready'
 			AND EXISTS (SELECT 1 `+incompleteQuestions+`)
-			AND NOT EXISTS (SELECT 1 `+incompleteQuestions+` AND q.clip_lease_until>now())
+			AND NOT EXISTS (SELECT 1 `+incompleteQuestions+` AND (q.clip_lease_until>now() OR q.clip_error<>''))
 			ORDER BY p.created_at,p.id LIMIT 1 FOR UPDATE OF p SKIP LOCKED`, nil)
 		if err != nil {
 			return err
@@ -51,9 +51,10 @@ func (r PackRepository) claimClip(ctx context.Context, packID uuid.UUID, seconds
 		clip_lease_until=clock_timestamp()+make_interval(secs => $2::int)
 		WHERE id=(SELECT q.id FROM quiz_packs p JOIN quiz_rounds r ON r.pack_id=p.id
 			JOIN quiz_questions q ON q.round_id=r.id
-			WHERE p.id=$1 AND p.clip_error='' AND q.status<>'ready'
-			AND NOT EXISTS (SELECT 1 `+incompleteQuestions+` AND q.clip_lease_until>now())
+			WHERE p.id=$1 AND q.status<>'ready'
+			AND NOT EXISTS (SELECT 1 `+incompleteQuestions+` AND (q.clip_lease_until>now() OR q.clip_error<>''))
 			ORDER BY q.number LIMIT 1)
+		AND NOT deleted
 		RETURNING *`, []any{packID, seconds})
 }
 
@@ -66,9 +67,9 @@ func (u *UnitOfWork) FinishQuizClip(ctx context.Context, task QuizClipTask, name
 		}
 
 		if err := execute(ctx, tx.db, `UPDATE quiz_questions
-			SET status=CASE WHEN $3='' THEN 'new' ELSE 'ready' END, clip_name=$3, clip_lease_until=NULL
+			SET status=CASE WHEN $3='' THEN 'new' ELSE 'ready' END, clip_name=$3, clip_error=$4, clip_lease_until=NULL
 			WHERE id=$1 AND status='pending' AND clip_lease_until=$2`,
-			[]any{task.Question.ID, task.Question.ClipLeaseUntil, name}); err != nil {
+			[]any{task.Question.ID, task.Question.ClipLeaseUntil, name, message}); err != nil {
 			return err
 		}
 
@@ -77,7 +78,7 @@ func (u *UnitOfWork) FinishQuizClip(ctx context.Context, task QuizClipTask, name
 }
 
 func (r PackRepository) updateClipStatus(ctx context.Context, packID uuid.UUID, message string) error {
-	return execute(ctx, r.db, `UPDATE quiz_packs p SET clip_error=$2, status=CASE
+	return execute(ctx, r.db, `UPDATE quiz_packs p SET status=CASE
 			WHEN $2<>'' THEN 'new'
 			WHEN NOT EXISTS (SELECT 1 `+incompleteQuestions+`) THEN 'ready'
 			ELSE p.status END
@@ -86,5 +87,6 @@ func (r PackRepository) updateClipStatus(ctx context.Context, packID uuid.UUID, 
 
 // RetryClips возвращает остановленный пакет в очередь, сохраняя готовые клипы.
 func (r PackRepository) RetryClips(ctx context.Context, packID uuid.UUID) error {
-	return execute(ctx, r.db, `UPDATE quiz_packs SET clip_error='' WHERE id=$1 AND clip_error<>''`, []any{packID})
+	return execute(ctx, r.db, `UPDATE quiz_questions q SET clip_error='' FROM quiz_rounds r
+		WHERE q.round_id=r.id AND r.pack_id=$1 AND q.clip_error<>''`, []any{packID})
 }
