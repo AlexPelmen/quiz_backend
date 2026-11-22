@@ -2,7 +2,9 @@ package httpapi_test
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -13,6 +15,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -20,11 +23,24 @@ import (
 	"devkeeper.com/quiz/internal/domain"
 	"devkeeper.com/quiz/internal/httpapi"
 	"devkeeper.com/quiz/internal/service"
+	"devkeeper.com/quiz/internal/store"
 	"devkeeper.com/quiz/internal/testutil"
 )
 
 func TestHTTPWorkflow(t *testing.T) {
 	pool, uow := testutil.Database(t)
+
+	settings, err := uow.Settings.Get(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	settings.StorageDir = t.TempDir()
+
+	if err := uow.Settings.Save(t.Context(), settings); err != nil {
+		t.Fatal(err)
+	}
+
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	app := service.New(uow, logger, "test-token")
 	router := httpapi.Router(app, logger)
@@ -75,7 +91,7 @@ func TestHTTPWorkflow(t *testing.T) {
 	call("GET", "/api/v1/artists/not-a-uuid", "", 400)
 	call("DELETE", url, "", 204)
 	call("GET", url, "", 404)
-	testPack(t, pool, router)
+	testPack(t, pool, router, app)
 }
 
 func TestQuotaAPI(t *testing.T) {
@@ -156,7 +172,7 @@ func decodeResult(t *testing.T, data []byte, target any) {
 	}
 }
 
-func testPack(t *testing.T, pool *pgxpool.Pool, router http.Handler) {
+func testPack(t *testing.T, pool *pgxpool.Pool, router http.Handler, app *service.App) {
 	t.Helper()
 
 	call := client(t, router)
@@ -165,7 +181,8 @@ func testPack(t *testing.T, pool *pgxpool.Pool, router http.Handler) {
 		seedHTTPTrack(t, pool, i)
 	}
 
-	data := call("POST", "/api/v1/quiz-packs", `{"name":"Квиз","question_count":10,"round_types":["artist_by_track"]}`, 201)
+	form := `{"name":"Квиз","question_count":10,"round_types":["artist_by_track"]}`
+	data := call("POST", "/api/v1/quiz-packs", form, 201)
 
 	var p domain.QuizPack
 
@@ -177,7 +194,7 @@ func testPack(t *testing.T, pool *pgxpool.Pool, router http.Handler) {
 
 	used := map[uuid.UUID]bool{}
 	for _, q := range p.Rounds[0].Questions {
-		if used[q.ArtistID] || q.TrackStartSec == nil || q.TrackFinishSec == nil {
+		if used[q.ArtistID] || q.SoundDownloadID == nil || q.TrackStartSec == nil || q.TrackFinishSec == nil {
 			t.Fatalf("повтор исполнителя или отсутствуют границы: %+v", q)
 		}
 
@@ -188,18 +205,66 @@ func testPack(t *testing.T, pool *pgxpool.Pool, router http.Handler) {
 		}
 	}
 
+	if p.Status != "new" || p.ClipsTotal != 10 || p.ClipsReady != 0 {
+		t.Fatalf("начальное состояние подготовки: %+v", p)
+	}
+
 	url := "/api/v1/quiz-packs/" + p.ID.String()
 	call("PATCH", url, `{"description":"Новое описание"}`, 200)
+	call("GET", url+"?status=ready", "", 404)
+
+	readyList := call("GET", "/api/v1/quiz-packs?status=ready", "", 200)
+	if !bytes.Equal(readyList, []byte("[]")) {
+		t.Fatalf("пакет появился в каталоге до подготовки: %s", readyList)
+	}
+
 	call("GET", url+"/questions/0/audio", "", 400)
+	call("GET", url+"/questions/1/audio", "", 404)
 	call("GET", url+"/questions/11/audio", "", 404)
 
 	if path := httpAudioFixture(t); path != "" {
-		testHTTPAudio(t, pool, router, httpAudioInput{URL: url, Path: path})
+		testQuizClipLease(t, store.New(pool), p.ID)
+		testHTTPAudio(t, pool, router, httpAudioInput{
+			URL: url, Path: path, App: app, FirstDownload: *p.Rounds[0].Questions[0].SoundDownloadID,
+		})
 	}
 
 	call("DELETE", url, "", 204)
 	call("GET", url, "", 404)
 	testMultipleRounds(t, pool, router)
+}
+
+func testQuizClipLease(t *testing.T, uow *store.UnitOfWork, id uuid.UUID) {
+	t.Helper()
+
+	ctx := t.Context()
+
+	expired, err := uow.ClaimQuizClip(ctx, -1)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	active, err := uow.ClaimQuizClip(ctx, 60)
+	if err != nil || active.Question.ID != expired.Question.ID || active.PackID != id {
+		t.Fatalf("прерванная задача не восстановилась: %+v, %v", active, err)
+	}
+
+	if _, err := uow.ClaimQuizClip(ctx, 60); !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("два клипа одного пакета готовятся одновременно: %v", err)
+	}
+
+	pack, err := uow.Packs.Get(ctx, id)
+	if err != nil || pack.Status != "pending" || pack.Rounds[0].Questions[0].Status != "pending" || pack.ClipsReady != 0 {
+		t.Fatalf("состояние во время обработки: %+v, %v", pack, err)
+	}
+
+	if err := uow.FinishQuizClip(ctx, expired, "stale.mp3", ""); !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("просроченная попытка записала результат: %v", err)
+	}
+
+	if err := uow.FinishQuizClip(ctx, active, "", ""); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func testMultipleRounds(t *testing.T, pool *pgxpool.Pool, router http.Handler) {
@@ -215,7 +280,8 @@ func testMultipleRounds(t *testing.T, pool *pgxpool.Pool, router http.Handler) {
 	}
 
 	call := client(t, router)
-	data := call("POST", "/api/v1/quiz-packs", `{"name":"Два раунда","question_count":20,"round_types":["artist_by_track","artist_by_cover"]}`, 201)
+	form := `{"name":"Два раунда","question_count":20,"round_types":["artist_by_track","artist_by_cover"]}`
+	data := call("POST", "/api/v1/quiz-packs", form, 201)
 
 	var pack domain.QuizPack
 
@@ -232,7 +298,12 @@ func testMultipleRounds(t *testing.T, pool *pgxpool.Pool, router http.Handler) {
 		if round.Type == "artist_by_cover" {
 			call("GET", fmt.Sprintf("%s/questions/%d/audio", url, round.Questions[0].Number), "", 404)
 		}
+
 		for _, q := range round.Questions {
+			if (q.Status == "ready") != (q.SoundDownloadID == nil) {
+				t.Fatalf("неверное начальное состояние вопроса: %+v", q)
+			}
+
 			if used[q.ArtistID] {
 				t.Fatal("исполнитель повторился между раундами")
 			}
@@ -298,19 +369,48 @@ func seedHTTPTrack(t *testing.T, pool *pgxpool.Pool, n int) {
 }
 
 type httpAudioInput struct {
-	URL  string
-	Path string
+	URL           string
+	Path          string
+	App           *service.App
+	FirstDownload uuid.UUID
 }
 
 func testHTTPAudio(t *testing.T, pool *pgxpool.Pool, router http.Handler, input httpAudioInput) {
+	t.Helper()
+
 	call := client(t, router)
 	url, path := input.URL, input.Path
 
-	t.Helper()
-
-	if _, err := pool.Exec(t.Context(), "UPDATE downloads SET uri=$1", path); err != nil {
+	if _, err := pool.Exec(t.Context(), "UPDATE downloads SET uri=$1 WHERE id=$2", path, input.FirstDownload); err != nil {
 		t.Fatal(err)
 	}
+
+	stop := startQuizWorkers(t, input.App)
+	defer stop()
+
+	failed := waitForQuizPack(t, call, url, func(pack domain.QuizPack) bool { return pack.ClipError != "" })
+	if failed.Status != "new" || failed.ClipsReady != 1 || failed.Rounds[0].Questions[1].Status != "new" {
+		t.Fatalf("состояние после ошибки подготовки: %+v", failed)
+	}
+
+	if _, err := pool.Exec(t.Context(), "UPDATE downloads SET uri=$1 WHERE file_type='mp3'", path); err != nil {
+		t.Fatal(err)
+	}
+
+	call("POST", url+"/retry-clips", "", 204)
+
+	ready := waitForQuizPack(t, call, url, func(pack domain.QuizPack) bool { return pack.Status == "ready" })
+	if ready.ClipsReady != ready.ClipsTotal || ready.ClipsReady != 10 || ready.ClipError != "" {
+		t.Fatalf("не все клипы подготовлены: %+v", ready)
+	}
+
+	for _, question := range ready.Rounds[0].Questions {
+		if question.Status != "ready" {
+			t.Fatalf("готовый пакет содержит неготовый вопрос: %+v", question)
+		}
+	}
+
+	call("GET", url+"?status=ready", "", 200)
 
 	data := call("GET", url+"/questions/1/audio", "", 200)
 	if len(data) < 1000 {
@@ -336,4 +436,46 @@ func testHTTPAudio(t *testing.T, pool *pgxpool.Pool, router http.Handler, input 
 	if response.Code != 206 || response.Header().Get("Content-Type") != "audio/mpeg" || response.Body.Len() != 100 {
 		t.Fatalf("не поддерживается HTTP Range: %d, %v", response.Code, response.Header())
 	}
+}
+
+func startQuizWorkers(t *testing.T, app *service.App) func() {
+	t.Helper()
+
+	ctx, cancel := context.WithCancel(t.Context())
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		app.RunWorkers(ctx)
+	}()
+
+	return func() {
+		cancel()
+		<-done
+	}
+}
+
+func waitForQuizPack(t *testing.T, call func(string, string, string, int) []byte, url string,
+	condition func(domain.QuizPack) bool,
+) domain.QuizPack {
+	t.Helper()
+
+	var pack domain.QuizPack
+
+	deadline := time.Now().Add(20 * time.Second)
+
+	for time.Now().Before(deadline) {
+		pack = domain.QuizPack{}
+		decodeResult(t, call("GET", url, "", 200), &pack)
+
+		if condition(pack) {
+			return pack
+		}
+
+		time.Sleep(50 * time.Millisecond)
+	}
+
+	t.Fatalf("пакет не достиг ожидаемого состояния: %+v", pack)
+
+	return pack
 }

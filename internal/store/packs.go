@@ -121,28 +121,37 @@ func (r PackRepository) Create(ctx context.Context, p domain.QuizPack) error {
 		}
 	}
 
-	return nil
+	return r.updateClipStatus(ctx, p.ID, "")
 }
 
 func (r PackRepository) createQuestion(ctx context.Context, q domain.Question) error {
 	return execute(ctx, r.db, `INSERT INTO quiz_questions(id,round_id,number,artist_id,track_id,album_id,
-		primary_text,secondary_text,image_download_id,sound_download_id,track_start_sec,track_finish_sec,answer,answer_info)
-		VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)`, []any{
-		q.ID, q.RoundID, q.Number,
-		q.ArtistID, q.TrackID, q.AlbumID, q.PrimaryText, q.SecondaryText, q.ImageDownloadID, q.SoundDownloadID,
-		q.TrackStartSec, q.TrackFinishSec, q.Answer, q.AnswerInfo,
-	})
+		primary_text,secondary_text,image_download_id,sound_download_id,track_start_sec,track_finish_sec,
+		answer,answer_info,status)
+		VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,CASE WHEN $10::uuid IS NULL THEN 'ready' ELSE 'new' END)`,
+		[]any{
+			q.ID, q.RoundID, q.Number,
+			q.ArtistID, q.TrackID, q.AlbumID, q.PrimaryText, q.SecondaryText, q.ImageDownloadID, q.SoundDownloadID,
+			q.TrackStartSec, q.TrackFinishSec, q.Answer, q.AnswerInfo,
+		})
 }
+
+const packWithClipCounts = `SELECT p.*, stats.clips_total, stats.clips_ready FROM quiz_packs p
+	CROSS JOIN LATERAL (
+		SELECT count(*) AS clips_total, count(*) FILTER (WHERE q.status='ready') AS clips_ready
+		FROM quiz_rounds r JOIN quiz_questions q ON q.round_id=r.id
+		WHERE r.pack_id=p.id AND q.sound_download_id IS NOT NULL
+	) stats`
 
 // List возвращает пакеты без вложенных вопросов.
 func (r PackRepository) List(ctx context.Context, p domain.Page) ([]domain.QuizPack, error) {
-	return query[domain.QuizPack](ctx, r.db, `SELECT * FROM quiz_packs
-		ORDER BY created_at DESC,id LIMIT $1 OFFSET $2`, []any{p.Limit, p.Offset})
+	return query[domain.QuizPack](ctx, r.db, packWithClipCounts+`
+		WHERE ($3='' OR p.status=$3) ORDER BY p.created_at DESC,p.id LIMIT $1 OFFSET $2`, []any{p.Limit, p.Offset, p.Status})
 }
 
 // Get загружает пакет, его раунды и вопросы с сохранением порядка.
 func (r PackRepository) Get(ctx context.Context, id uuid.UUID) (domain.QuizPack, error) {
-	p, err := one[domain.QuizPack](ctx, r.db, "SELECT * FROM quiz_packs WHERE id=$1", []any{id})
+	p, err := one[domain.QuizPack](ctx, r.db, packWithClipCounts+" WHERE p.id=$1", []any{id})
 	if err != nil {
 		return p, err
 	}
@@ -165,9 +174,13 @@ func (r PackRepository) Get(ctx context.Context, id uuid.UUID) (domain.QuizPack,
 }
 
 // Question возвращает вопрос по сквозному номеру внутри пакета.
-func (r PackRepository) Question(ctx context.Context, packID uuid.UUID, number int) (domain.Question, error) {
+func (r PackRepository) Question(
+	ctx context.Context, packID uuid.UUID, number int, readyOnly bool,
+) (domain.Question, error) {
 	return one[domain.Question](ctx, r.db, `SELECT q.* FROM quiz_questions q JOIN quiz_rounds r ON r.id=q.round_id
-		WHERE r.pack_id=$1 AND q.number=$2`, []any{packID, number})
+		JOIN quiz_packs p ON p.id=r.pack_id
+		WHERE r.pack_id=$1 AND q.number=$2 AND (NOT $3::boolean OR p.status='ready')`,
+		[]any{packID, number, readyOnly})
 }
 
 // Update изменяет описание сохранённого пакета.

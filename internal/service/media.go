@@ -395,14 +395,31 @@ func checkImage(path string) (kind string, result error) {
 	return kind, nil
 }
 
-// Audio возвращает путь к кэшированному отрывку по номеру вопроса в пакете.
-func (a *App) Audio(ctx context.Context, packID uuid.UUID, number int) (string, error) {
-	q, err := a.uow.Packs.Question(ctx, packID, number)
+// Audio возвращает путь к готовому отрывку по номеру вопроса в пакете.
+func (a *App) Audio(ctx context.Context, packID uuid.UUID, number int, readyOnly bool) (string, error) {
+	q, err := a.uow.Packs.Question(ctx, packID, number, readyOnly)
 	if err != nil {
 		return "", err
 	}
 
-	if q.SoundDownloadID == nil || q.TrackStartSec == nil || q.TrackFinishSec == nil {
+	if q.Status != "ready" || q.ClipName == "" {
+		return "", domain.ErrNotFound
+	}
+
+	if a.objects != nil {
+		return a.objects.URI("music/clips/" + q.ClipName), nil
+	}
+
+	s, err := a.Settings(ctx)
+	if err != nil {
+		return "", err
+	}
+
+	return filepath.Join(s.StorageDir, "music", "clips", q.ClipName), nil
+}
+
+func (a *App) prepareClip(ctx context.Context, s domain.Settings, q domain.Question) (string, error) {
+	if q.SoundDownloadID == nil || q.TrackID == nil || q.TrackStartSec == nil || q.TrackFinishSec == nil {
 		return "", domain.ErrNotFound
 	}
 
@@ -415,17 +432,11 @@ func (a *App) Audio(ctx context.Context, packID uuid.UUID, number int) (string, 
 		return "", domain.ErrNotFound
 	}
 
-	s, err := a.Settings(ctx)
-	if err != nil {
-		return "", err
-	}
 	artist, err := a.uow.Artists.Get(ctx, q.ArtistID)
 	if err != nil {
 		return "", err
 	}
-	if q.TrackID == nil {
-		return "", domain.ErrNotFound
-	}
+
 	track, err := a.uow.Tracks.Get(ctx, *q.TrackID)
 	if err != nil {
 		return "", err

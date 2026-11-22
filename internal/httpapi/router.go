@@ -17,6 +17,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 
+	"devkeeper.com/quiz/internal/auth"
 	"devkeeper.com/quiz/internal/domain"
 	"devkeeper.com/quiz/internal/logbuffer"
 	"devkeeper.com/quiz/internal/service"
@@ -87,6 +88,7 @@ func Router(app *service.App, logger *slog.Logger, buffers ...*logbuffer.Buffer)
 	v1.GET("/storage", h.storageReport)
 	v1.POST("/storage/actions", h.storageAction)
 	v1.GET("/quiz-packs/:id/questions/:number/audio", h.audio)
+	v1.POST("/quiz-packs/:id/retry-clips", h.retryClips)
 	v1.POST("/quiz-rounds/:id/results", h.recordRoundResult)
 	v1.GET("/questions/:id/like", h.questionLike)
 	v1.PUT("/questions/:id/like", h.questionLike)
@@ -221,9 +223,35 @@ func (a *api) read(resource string) gin.HandlerFunc {
 			}
 		}
 
+		if resource == "quiz-packs" {
+			p.Status = quizPackStatus(c)
+		}
+
 		value, err := a.app.Read(c.Request.Context(), service.ReadRequest{Resource: resource, ID: id, Page: p})
 		a.respond(c, value, err)
 	}
+}
+
+func quizPackStatus(c *gin.Context) string {
+	if c.Query("status") == "ready" || auth.ReadyPacksOnly(c.Request.Context()) {
+		return "ready"
+	}
+
+	return ""
+}
+
+func (a *api) retryClips(c *gin.Context) {
+	id, err := requestID(c)
+	if err == nil {
+		err = a.app.RetryQuizClips(c.Request.Context(), *id)
+	}
+
+	if err != nil {
+		a.respond(c, nil, err)
+		return
+	}
+
+	c.Status(http.StatusNoContent)
 }
 
 func validCatalogSort(resource string, p domain.Page) bool {
@@ -641,7 +669,7 @@ func (a *api) audio(c *gin.Context) {
 		return
 	}
 
-	path, err := a.app.Audio(c.Request.Context(), *id, number)
+	path, err := a.app.Audio(c.Request.Context(), *id, number, quizPackStatus(c) == "ready")
 	if err == nil {
 		c.Header("Content-Type", "audio/mpeg")
 		c.Header("Content-Disposition", "inline; filename=question-"+strconv.Itoa(number)+".mp3")

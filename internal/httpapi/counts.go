@@ -9,7 +9,13 @@ func (a *api) catalogCount(resource string) gin.HandlerFunc {
 			a.respond(c, nil, err)
 			return
 		}
+
 		p.Name = c.Query("name")
+
+		if resource == "quiz-packs" {
+			p.Status = quizPackStatus(c)
+		}
+
 		count, err := a.app.ListCount(c.Request.Context(), resource, p)
 		a.respond(c, gin.H{"count": count}, err)
 	}

@@ -55,6 +55,15 @@ type ReadRequest struct {
 
 // Read предоставляет каталожные данные HTTP-слою без прямого доступа к репозиториям.
 func (a *App) Read(ctx context.Context, req ReadRequest) (any, error) {
+	if req.ID != nil && req.Resource == "quiz-packs" && req.Page.Status == "ready" {
+		pack, err := a.uow.Packs.Get(ctx, *req.ID)
+		if err == nil && pack.Status != "ready" {
+			return nil, domain.ErrNotFound
+		}
+
+		return pack, err
+	}
+
 	if req.ID != nil {
 		return a.readOne(ctx, req.Resource, *req.ID)
 	}

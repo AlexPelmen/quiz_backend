@@ -81,7 +81,13 @@ func TestS3AudioFromUpload(t *testing.T) {
 
 	removeTestObject(t, bucket, clipKey)
 
-	route := "/api/v1/quiz-packs/" + pack.ID.String() + "/questions/1/audio"
+	url := "/api/v1/quiz-packs/" + pack.ID.String()
+
+	defer startQuizWorkers(t, app)()
+
+	waitForQuizPack(t, client(t, router), url, func(pack domain.QuizPack) bool { return pack.Status == "ready" })
+
+	route := url + "/questions/1/audio"
 
 	clip := client(t, router)("GET", route, "", 200)
 	if len(clip) <= 32 {

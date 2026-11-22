@@ -1801,7 +1801,14 @@
     "/api/v1/quiz-packs": {
       "get": {
         "summary": "Список quiz-packs",
+        "description": "У пользователей без права packs список содержит только готовые пакеты.",
         "parameters": [
+          {
+            "name": "status",
+            "in": "query",
+            "description": "Готовые пакеты",
+            "schema": { "type": "string", "enum": ["ready"] }
+          },
           {
             "name": "limit",
             "in": "query",
@@ -2049,6 +2056,14 @@
       ],
       "get": {
         "summary": "Получить QuizPack",
+        "description": "Для неготового пакета возвращается 404, если у пользователя нет права packs или задан status=ready.",
+        "parameters": [
+          {
+            "name": "status",
+            "in": "query",
+            "schema": { "type": "string", "enum": ["ready"] }
+          }
+        ],
         "responses": {
           "200": {
             "description": "Объект",
@@ -2563,6 +2578,26 @@
         }
       }
     },
+    "/api/v1/quiz-packs/{id}/retry-clips": {
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "schema": { "type": "string", "format": "uuid" }
+        }
+      ],
+      "post": {
+        "summary": "Возобновить подготовку клипов после ошибки",
+        "description": "Доступно с правом packs. Уже сохранённые клипы переиспользуются.",
+        "responses": {
+          "204": { "description": "Пакет возвращён в очередь" },
+          "400": { "description": "Некорректный ID" },
+          "403": { "description": "Недостаточно прав" },
+          "404": { "description": "Пакет отсутствует или не ожидает повторной попытки" }
+        }
+      }
+    },
     "/api/v1/quiz-packs/{id}/questions/{number}/audio": {
       "parameters": [
         {
@@ -2588,7 +2623,7 @@
       ],
       "get": {
         "summary": "MP3-отрывок вопроса длиной до 30 секунд",
-        "description": "Границы сохранены в Question. При первом запросе отрывок создаётся ffmpeg и кэшируется. Исходные ID3-теги с ответом не выдаются.",
+        "description": "Отдаёт подготовленный в фоне клип. Для вопроса без готового аудио возвращается 404. Исходные ID3-теги с ответом не выдаются.",
         "responses": {
           "200": {
             "description": "MP3",
@@ -4570,7 +4605,13 @@
     "/api/v1/quiz-packs/count": {
       "get": {
         "summary": "Количество записей с учётом фильтров списка",
-        "parameters": [],
+        "parameters": [
+          {
+            "name": "status",
+            "in": "query",
+            "schema": { "type": "string", "enum": ["ready"] }
+          }
+        ],
         "responses": {
           "200": {
             "description": "Количество записей",
@@ -5493,9 +5534,14 @@
         },
         "additionalProperties": false
       },
+      "QuizStatus": {
+        "type": "string",
+        "enum": ["new", "pending", "ready"]
+      },
       "Question": {
         "type": "object",
         "properties": {
+          "status": { "$ref": "#/components/schemas/QuizStatus" },
           "id": {
             "type": "string",
             "format": "uuid"
@@ -5627,6 +5673,10 @@
       "QuizPack": {
         "type": "object",
         "properties": {
+          "status": { "$ref": "#/components/schemas/QuizStatus" },
+          "clips_total": { "type": "integer", "minimum": 0 },
+          "clips_ready": { "type": "integer", "minimum": 0 },
+          "clip_error": { "type": "string", "description": "Причина остановки подготовки клипов" },
           "id": {
             "type": "string",
             "format": "uuid"

@@ -135,7 +135,7 @@ func Handler(next http.Handler, service *Service, secureCookie bool) http.Handle
 			}
 		}
 
-		next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), userContextKey{}, u.ID)))
+		next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), userContextKey{}, u)))
 	})
 }
 

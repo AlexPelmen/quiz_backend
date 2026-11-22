@@ -82,7 +82,7 @@ func (a *api) questionCover(c *gin.Context) {
 		return
 	}
 
-	data, err := a.app.QuestionCover(c.Request.Context(), *id, number)
+	data, err := a.app.QuestionCover(c.Request.Context(), *id, number, quizPackStatus(c) == "ready")
 	a.coverResponse(c, data, err)
 }
 

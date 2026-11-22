@@ -22,6 +22,7 @@ func (a *App) RunWorkers(ctx context.Context) {
 	var wg sync.WaitGroup
 
 	wg.Go(func() { a.loop(ctx, a.parseNext) })
+	wg.Go(func() { a.loop(ctx, a.prepareNextQuizClip) })
 
 	for index := range 16 {
 		wg.Go(func() {

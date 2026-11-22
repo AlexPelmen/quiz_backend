@@ -152,6 +152,10 @@ type QuizPack struct {
 	Tags            []string    `json:"tags"`
 	CreatedAt       time.Time   `json:"created_at"`
 	UpdatedAt       time.Time   `json:"updated_at"`
+	Status          string      `json:"status"`
+	ClipsTotal      int         `json:"clips_total"`
+	ClipsReady      int         `json:"clips_ready"`
+	ClipError       string      `json:"clip_error,omitempty"`
 	Rounds          []QuizRound `json:"rounds,omitempty" db:"-"`
 }
 
@@ -180,6 +184,9 @@ type Question struct {
 	TrackFinishSec  *float64       `json:"trackFinishSec"`
 	Answer          string         `json:"answer"`
 	AnswerInfo      map[string]any `json:"answer_info"`
+	Status          string         `json:"status"`
+	ClipName        string         `json:"-"`
+	ClipLeaseUntil  *time.Time     `json:"-"`
 	CreatedAt       time.Time      `json:"created_at"`
 	UpdatedAt       time.Time      `json:"updated_at"`
 }

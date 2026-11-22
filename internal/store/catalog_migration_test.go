@@ -58,7 +58,8 @@ func TestCatalogMetricsMigration(t *testing.T) {
 
 	pack, err := uow.Packs.Get(ctx, uuid.MustParse("00000000-0000-0000-0000-000000000006"))
 	if err != nil || len(pack.Rounds) != 1 || len(pack.Rounds[0].Questions) != 1 ||
-		pack.Rounds[0].Questions[0].SoundDownloadID == nil {
+		pack.Rounds[0].Questions[0].SoundDownloadID == nil || pack.Status != "new" || pack.ClipsTotal != 1 ||
+		pack.Rounds[0].Questions[0].Status != "new" {
 		t.Fatalf("пакет: %+v %v", pack, err)
 	}
 

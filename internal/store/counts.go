@@ -29,7 +29,8 @@ func (u *UnitOfWork) ListCount(ctx context.Context, resource string, p domain.Pa
 		q = `SELECT count(*) FROM (` + cleanupCandidates + `) candidates`
 		args = []any{domain.AlbumSubscriberThresholds()}
 	case "quiz-packs":
-		q = `SELECT count(*) FROM quiz_packs`
+		q = `SELECT count(*) FROM quiz_packs WHERE ($1='' OR status=$1)`
+		args = []any{p.Status}
 	default:
 		return 0, domain.ErrNotFound
 	}

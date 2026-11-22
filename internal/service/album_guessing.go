@@ -89,8 +89,8 @@ func (a *App) GuessingPreview(ctx context.Context, albumID, coverID uuid.UUID) (
 }
 
 // QuestionCover заново рисует актуальные маски, не выдавая исходный файл.
-func (a *App) QuestionCover(ctx context.Context, packID uuid.UUID, number int) ([]byte, error) {
-	id, rectangles, err := a.uow.Packs.QuestionCover(ctx, packID, number)
+func (a *App) QuestionCover(ctx context.Context, packID uuid.UUID, number int, readyOnly bool) ([]byte, error) {
+	id, rectangles, err := a.uow.Packs.QuestionCover(ctx, packID, number, readyOnly)
 	if err != nil {
 		return nil, err
 	}

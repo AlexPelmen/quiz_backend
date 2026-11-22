@@ -8,11 +8,12 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"github.com/google/uuid"
+
 	"devkeeper.com/quiz/internal/auth"
 	"devkeeper.com/quiz/internal/httpapi"
 	"devkeeper.com/quiz/internal/service"
 	"devkeeper.com/quiz/internal/testutil"
-	"github.com/google/uuid"
 )
 
 func TestProtectedRouterModerator(t *testing.T) {
@@ -36,12 +37,22 @@ func TestProtectedRouterModerator(t *testing.T) {
 		t.Fatalf("вход: %d %s", login.Code, login.Body.String())
 	}
 	cookie := login.Result().Cookies()[0]
+	pending, ready := uuid.NewString(), uuid.NewString()
+
+	if _, err := pool.Exec(t.Context(), `INSERT INTO quiz_packs(id,name,status)
+		VALUES ($1,'Подготовка','pending'), ($2,'Готов','ready')`, pending, ready); err != nil {
+		t.Fatal(err)
+	}
+
 	for _, tc := range []struct {
 		method, path string
 		want         int
 	}{
 		{"GET", "/api/v1/album-guessing", 200},
 		{"GET", "/api/v1/quiz-packs", 200},
+		{"GET", "/api/v1/quiz-packs/" + pending, 404},
+		{"GET", "/api/v1/quiz-packs/" + ready, 200},
+		{"POST", "/api/v1/quiz-packs/" + pending + "/retry-clips", 403},
 		{"GET", "/api/v1/settings", 403},
 		{"GET", "/api/v1/users", 403},
 		{"POST", "/api/v1/artists", 403},
@@ -50,8 +61,14 @@ func TestProtectedRouterModerator(t *testing.T) {
 		req.AddCookie(cookie)
 		response := httptest.NewRecorder()
 		h.ServeHTTP(response, req)
+
 		if response.Code != tc.want {
 			t.Errorf("%s %s: %d, ожидалось %d", tc.method, tc.path, response.Code, tc.want)
+		}
+
+		if tc.path == "/api/v1/quiz-packs" &&
+			(bytes.Contains(response.Body.Bytes(), []byte(pending)) || !bytes.Contains(response.Body.Bytes(), []byte(ready))) {
+			t.Errorf("игровой каталог должен содержать только готовый пакет: %s", response.Body.String())
 		}
 	}
 }
