@@ -2059,12 +2059,17 @@
       ],
       "get": {
         "summary": "Получить QuizPack",
-        "description": "Для неготового пакета возвращается 404, если у пользователя нет права packs или задан status=ready.",
+        "description": "Для игрока без права packs и при play=1 возвращается готовый пакет без правильных ответов. При status=ready пакет также должен быть готов.",
         "parameters": [
           {
             "name": "status",
             "in": "query",
             "schema": { "type": "string", "enum": ["ready"] }
+          },
+          {
+            "name": "play",
+            "in": "query",
+            "schema": { "type": "string", "enum": ["1"] }
           }
         ],
         "responses": {
@@ -2703,10 +2708,91 @@
         }
       }
     },
+    "/api/v1/quiz-answer-options": {
+      "get": {
+        "summary": "Подсказки к полю игрового ответа",
+        "description": "Требуется право player. До 10 вариантов. Для одного символа ищется точное совпадение, для двух начало названия, от трёх фрагмент и транслитерация между русской кириллицей и латиницей. Совпадения в исходном написании идут первыми. Если совпадений нет и введено больше пяти букв, допускается одна правка в начале названия. Латинскую диакритику можно опускать, пунктуацию заменять пробелами. Отдельная цифра от 0 до 9 совпадает со своим английским написанием. При вводе одной цифры поиск идёт по началу названия.",
+        "parameters": [
+          { "name": "q", "in": "query", "required": true, "schema": { "type": "string", "maxLength": 1000 } },
+          { "name": "prefer", "in": "query", "schema": { "type": "string", "enum": ["artist", "album", "track"] } }
+        ],
+        "responses": {
+          "200": {
+            "description": "Подходящие варианты",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "maxItems": 10,
+                  "items": {
+                    "type": "object",
+                    "required": ["id", "type", "name"],
+                    "properties": {
+                      "id": { "type": "string", "format": "uuid" },
+                      "type": { "type": "string", "enum": ["artist", "album", "track"] },
+                      "name": { "type": "string" },
+                      "artist": { "type": "string" }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": { "description": "Некорректные параметры" },
+          "504": { "description": "Время поиска истекло" }
+        }
+      }
+    },
+    "/api/v1/questions/{id}/answer": {
+      "post": {
+        "summary": "Проверить ответ игрока и раскрыть правильный ответ",
+        "description": "Для варианта ожидаемого типа допускается расстояние Левенштейна до единицы, если оба названия длиннее пяти букв. При повторной отправке к тому же вопросу и attempt_id возвращается первая отправка игрока.",
+        "parameters": [
+          { "name": "id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["attempt_id", "option_id", "option_type"],
+                "additionalProperties": false,
+                "properties": {
+                  "attempt_id": { "type": "string", "format": "uuid" },
+                  "option_id": { "type": "string", "format": "uuid" },
+                  "option_type": { "type": "string", "enum": ["artist", "album", "track"] }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Ответ принят",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": ["text", "correct", "question"],
+                  "properties": {
+                    "text": { "type": "string" },
+                    "correct": { "type": "boolean" },
+                    "question": { "$ref": "#/components/schemas/Question" }
+                  }
+                }
+              }
+            }
+          },
+          "400": { "description": "Вариант не выбран, отсутствует в каталоге или данные некорректны" },
+          "404": { "description": "Вопрос отсутствует, удалён или входит в неготовый пакет" }
+        }
+      }
+    },
     "/api/v1/quiz-rounds/{id}/results": {
       "post": {
         "summary": "Сохранить результат завершённого раунда",
-        "description": "Повтор с тем же attempt_id и теми же ответами не увеличивает счётчики второй раз. Для вопросов с deleted: true передавайте false. Они сохраняют свои позиции и пропускаются при начислении счётчиков каталога.",
+        "description": "Игрок отправляет только attempt_id. Сервер использует сохранённые ответы на все действующие вопросы. Форма с r, n и answers доступна пользователям с правом packs. Повтор с тем же attempt_id не увеличивает счётчики второй раз. Удалённые вопросы пропускаются при начислении.",
         "parameters": [
           {
             "name": "id",
@@ -2724,12 +2810,12 @@
             "application/json": {
               "schema": {
                 "type": "object",
-                "required": [
-                  "attempt_id",
-                  "r",
-                  "n",
-                  "answers"
-                ],
+                "required": ["attempt_id"],
+                "dependentRequired": {
+                  "r": ["n", "answers"],
+                  "n": ["r", "answers"],
+                  "answers": ["r", "n"]
+                },
                 "additionalProperties": false,
                 "properties": {
                   "attempt_id": {

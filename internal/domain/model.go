@@ -194,6 +194,27 @@ type Question struct {
 	UpdatedAt       time.Time      `json:"updated_at"`
 }
 
+// AnswerOption описывает результат поиска по игровому каталогу.
+type AnswerOption struct {
+	ID     uuid.UUID `json:"id"`
+	Name   string    `json:"name"`
+	Type   string    `json:"type"`
+	Artist string    `json:"artist,omitempty"`
+}
+
+// QuestionAttempt определяет ответ на вопрос в конкретном прохождении.
+type QuestionAttempt struct {
+	QuestionID uuid.UUID
+	UserID     uuid.UUID
+	AttemptID  uuid.UUID
+}
+
+// SubmittedAnswer хранит введённый ответ и результат проверки.
+type SubmittedAnswer struct {
+	Text    string `json:"text"`
+	Correct bool   `json:"correct"`
+}
+
 // Candidate содержит данные, необходимые обработчику раунда.
 type Candidate struct {
 	AlbumNames []string

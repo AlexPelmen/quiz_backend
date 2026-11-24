@@ -26,29 +26,86 @@ func (a *App) RecordRoundResult(ctx context.Context, id uuid.UUID, f RoundResult
 		return fmt.Errorf("%w: укажите попытку, итог и все ответы раунда", domain.ErrInvalid)
 	}
 
+	return a.recordRound(ctx, id, f.AttemptID, func(_ *store.UnitOfWork, questions []domain.Question) ([]bool, error) {
+		return verifyAnswers(questions, f)
+	})
+}
+
+// RecordPlayedRound завершает раунд по ответам, которые уже проверил сервер.
+func (a *App) RecordPlayedRound(ctx context.Context, id, userID, attemptID uuid.UUID) error {
+	if attemptID == uuid.Nil {
+		return fmt.Errorf("%w: укажите попытку", domain.ErrInvalid)
+	}
+
+	return a.recordRound(ctx, id, attemptID, func(tx *store.UnitOfWork, questions []domain.Question) ([]bool, error) {
+		saved, err := tx.Packs.SubmittedRoundAnswers(ctx, id, userID, attemptID)
+		if err != nil {
+			return nil, err
+		}
+
+		answers := make([]bool, len(questions))
+
+		for i, q := range questions {
+			if q.Deleted {
+				continue
+			}
+
+			correct, ok := saved[q.ID]
+			if !ok {
+				return nil, fmt.Errorf("%w: ответьте на все вопросы раунда", domain.ErrInvalid)
+			}
+
+			answers[i] = correct
+		}
+
+		return answers, nil
+	})
+}
+
+func (a *App) recordRound(
+	ctx context.Context, id, attemptID uuid.UUID, collect func(*store.UnitOfWork, []domain.Question) ([]bool, error),
+) error {
 	return a.uow.RoundTransaction(ctx, func(tx *store.UnitOfWork) error {
 		questions, err := tx.Packs.RoundQuestions(ctx, id)
 		if err != nil {
 			return err
 		}
 
-		answers, err := verifyAnswers(questions, f)
+		if len(questions) == 0 {
+			return fmt.Errorf("%w: в раунде нет вопросов", domain.ErrInvalid)
+		}
+
+		answers, err := collect(tx, questions)
 		if err != nil {
 			return err
 		}
 
+		correct := 0
+		order := make([]int, len(answers))
+
+		for i, answer := range answers {
+			order[i] = i
+
+			if answer {
+				correct++
+			}
+		}
+
 		inserted, err := tx.Packs.SaveRoundResult(ctx, store.RoundResult{
-			RoundID: id, AttemptID: f.AttemptID, Correct: *f.Correct, Answers: answers,
+			RoundID: id, AttemptID: attemptID, Correct: correct, Answers: answers,
 		})
 		if err != nil || !inserted {
 			return err
 		}
 
 		// Раунды с общими исполнителями обновляют строки в одном порядке.
-		slices.SortFunc(questions, func(a, b domain.Question) int { return bytes.Compare(a.ArtistID[:], b.ArtistID[:]) })
+		slices.SortFunc(order, func(i, j int) int {
+			return bytes.Compare(questions[i].ArtistID[:], questions[j].ArtistID[:])
+		})
 
-		for _, q := range questions {
-			if err := tx.Packs.CountAnswer(ctx, q, *f.Answers[q.ID]); err != nil {
+		for _, i := range order {
+			q := questions[i]
+			if err := tx.Packs.CountAnswer(ctx, q, answers[i]); err != nil {
 				return fmt.Errorf("вопрос %s: %w", q.ID, err)
 			}
 		}

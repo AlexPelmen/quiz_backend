@@ -176,6 +176,12 @@ func requiredSection(method, path string) string {
 	if parts[0] == "questions" && len(parts) == 3 && (parts[2] == "feedback" || parts[2] == "like") {
 		return "player"
 	}
+
+	if method == "GET" && path == "quiz-answer-options" ||
+		method == "POST" && len(parts) == 3 && parts[0] == "questions" && parts[2] == "answer" {
+		return "player"
+	}
+
 	if parts[0] == "question-feedback" {
 		return "question-feedback"
 	}

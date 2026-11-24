@@ -89,7 +89,9 @@ func Router(app *service.App, logger *slog.Logger, buffers ...*logbuffer.Buffer)
 	v1.POST("/storage/actions", h.storageAction)
 	v1.GET("/quiz-packs/:id/questions/:number/audio", h.audio)
 	v1.POST("/quiz-packs/:id/retry-clips", h.retryClips)
+	v1.GET("/quiz-answer-options", h.answerOptions)
 	v1.POST("/quiz-rounds/:id/results", h.recordRoundResult)
+	v1.POST("/questions/:id/answer", h.submitAnswer)
 	v1.GET("/questions/:id/like", h.questionLike)
 	v1.PUT("/questions/:id/like", h.questionLike)
 	v1.POST("/questions/:id/feedback", h.submitFeedback)
@@ -224,6 +226,15 @@ func (a *api) read(resource string) gin.HandlerFunc {
 		}
 
 		if resource == "quiz-packs" {
+			if id != nil && (c.Query("play") == "1" || auth.ReadyPacksOnly(c.Request.Context())) {
+				c.Header("Cache-Control", "no-store")
+
+				pack, err := a.app.PlayingPack(c.Request.Context(), *id)
+				a.respond(c, pack, err)
+
+				return
+			}
+
 			p.Status = quizPackStatus(c)
 		}
 
@@ -415,7 +426,19 @@ func (a *api) recordRoundResult(c *gin.Context) {
 		return
 	}
 
-	if err := a.app.RecordRoundResult(c.Request.Context(), *id, f); err != nil {
+	ctx := c.Request.Context()
+	userID, authenticated := auth.UserID(ctx)
+
+	switch {
+	case f.Answers == nil && f.Correct == nil && f.Total == 0 && authenticated:
+		err = a.app.RecordPlayedRound(ctx, *id, userID, f.AttemptID)
+	case auth.ReadyPacksOnly(ctx):
+		err = fmt.Errorf("%w: завершите раунд с проверенными ответами", domain.ErrInvalid)
+	default:
+		err = a.app.RecordRoundResult(ctx, *id, f)
+	}
+
+	if err != nil {
 		a.respond(c, nil, err)
 		return
 	}
