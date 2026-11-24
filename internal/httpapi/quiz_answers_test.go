@@ -93,6 +93,27 @@ func TestQuizAnswerFlow(t *testing.T) {
 		t.Fatalf("правильная подсказка не засчитана: %+v", reveal)
 	}
 
+	timeoutAttempt := uuid.New()
+	timeout := fmt.Sprintf(`{"attempt_id":%q,"timed_out":true}`, timeoutAttempt)
+	call("POST", firstURL, fmt.Sprintf(`{"attempt_id":%q,"timed_out":true,"option_id":%q,"option_type":"artist"}`,
+		timeoutAttempt, options.correct), 400)
+	decodeResult(t, call("POST", firstURL, timeout, 201), &reveal)
+	if !reveal.TimedOut || reveal.Correct || reveal.Text != "" || reveal.Question.Answer != "Mötley Crüe" {
+		t.Fatalf("после истечения времени должен раскрыться ответ без начисления очка: %+v", reveal)
+	}
+
+	decodeResult(t, call("POST", firstURL, answerSelection(timeoutAttempt, options.correct), 201), &reveal)
+	if !reveal.TimedOut || reveal.Correct {
+		t.Fatalf("поздний ответ не должен менять сохранённый пропуск: %+v", reveal)
+	}
+
+	decodeResult(t, call("POST", secondURL, answerSelection(timeoutAttempt, options.other), 201), &reveal)
+	if reveal.TimedOut || !reveal.Correct {
+		t.Fatalf("пропуск не должен мешать ответить на следующий вопрос: %+v", reveal)
+	}
+
+	call("POST", roundURL, fmt.Sprintf(`{"attempt_id":%q}`, timeoutAttempt), 204)
+	assertSavedQuizScore(t, pool, fixture.round, timeoutAttempt)
 	assertAnswerTypos(t, pool, call, fixture.first)
 }
 

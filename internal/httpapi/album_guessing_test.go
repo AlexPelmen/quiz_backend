@@ -127,6 +127,13 @@ func TestAlbumGuessing(t *testing.T) {
 		t.Fatal("не сформирован полный раунд по обложкам")
 	}
 
+	var listed []domain.QuizPack
+
+	decodeResult(t, call("GET", "/api/v1/quiz-packs?status=ready", "", 200), &listed)
+	if len(listed) != 1 || listed[0].ID != pack.ID || listed[0].QuestionsTotal != 10 || listed[0].ClipsTotal != 0 {
+		t.Fatalf("в списке должны учитываться вопросы по обложкам: %+v", listed)
+	}
+
 	if bytes.Contains(raw, []byte(`"album_id"`)) || bytes.Contains(raw, []byte(first.CoverDownloadID.String())) {
 		t.Fatal("в игровом пакете есть ссылка на исходную обложку")
 	}

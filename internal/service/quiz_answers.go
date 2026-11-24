@@ -59,17 +59,19 @@ func answerOptionType(kind string) bool {
 	return kind == "artist" || kind == "album" || kind == "track"
 }
 
-// AnswerForm передаёт тип и идентификатор выбранной подсказки.
+// AnswerForm передаёт выбранную подсказку или отмечает истечение времени.
 type AnswerForm struct {
 	AttemptID  uuid.UUID `json:"attempt_id"`
 	OptionType string    `json:"option_type"`
 	OptionID   uuid.UUID `json:"option_id"`
+	TimedOut   bool      `json:"timed_out"`
 }
 
 // AnswerReveal содержит принятую отправку и данные карточки правильного ответа.
 type AnswerReveal struct {
 	domain.SubmittedAnswer
 	Question domain.Question `json:"question"`
+	TimedOut bool            `json:"timed_out"`
 }
 
 // SubmitQuestionAnswer проверяет и фиксирует ответ игрока перед раскрытием карточки.
@@ -80,7 +82,11 @@ func (a *App) SubmitQuestionAnswer(
 		return AnswerReveal{}, fmt.Errorf("%w: укажите попытку", domain.ErrInvalid)
 	}
 
-	if f.OptionID == uuid.Nil || !answerOptionType(f.OptionType) {
+	if f.TimedOut {
+		if f.OptionID != uuid.Nil || f.OptionType != "" {
+			return AnswerReveal{}, fmt.Errorf("%w: пропуск не должен содержать вариант ответа", domain.ErrInvalid)
+		}
+	} else if f.OptionID == uuid.Nil || !answerOptionType(f.OptionType) {
 		return AnswerReveal{}, fmt.Errorf("%w: выберите вариант из списка", domain.ErrInvalid)
 	}
 
@@ -92,14 +98,18 @@ func (a *App) SubmitQuestionAnswer(
 			return err
 		}
 
-		if q.OptionName == nil {
-			return fmt.Errorf("%w: вариант больше недоступен, выберите другой", domain.ErrInvalid)
+		var answer domain.SubmittedAnswer
+
+		if !f.TimedOut {
+			if q.OptionName == nil || *q.OptionName == "" {
+				return fmt.Errorf("%w: вариант больше недоступен, выберите другой", domain.ErrInvalid)
+			}
+			answer = domain.SubmittedAnswer{Text: *q.OptionName, Correct: matchesAnswer(q, f)}
 		}
 
 		keys := domain.QuestionAttempt{QuestionID: questionID, UserID: userID, AttemptID: f.AttemptID}
-		answer := domain.SubmittedAnswer{Text: *q.OptionName, Correct: matchesAnswer(q, f)}
 		saved, err := tx.Packs.SaveQuestionAnswer(ctx, keys, answer)
-		response = AnswerReveal{SubmittedAnswer: saved, Question: q.Question}
+		response = AnswerReveal{SubmittedAnswer: saved, Question: q.Question, TimedOut: saved.Text == ""}
 
 		return err
 	})

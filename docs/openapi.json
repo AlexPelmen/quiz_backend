@@ -2746,7 +2746,7 @@
     "/api/v1/questions/{id}/answer": {
       "post": {
         "summary": "Проверить ответ игрока и раскрыть правильный ответ",
-        "description": "Для варианта ожидаемого типа допускается расстояние Левенштейна до единицы, если оба названия длиннее пяти букв. При повторной отправке к тому же вопросу и attempt_id возвращается первая отправка игрока.",
+        "description": "Для варианта ожидаемого типа допускается расстояние Левенштейна до единицы, если оба названия длиннее пяти букв. После истечения времени клиент передаёт timed_out=true без варианта. Пропуск раскрывает ответ и учитывается как неверный. При повторной отправке к тому же вопросу и attempt_id возвращается первая отправка игрока.",
         "parameters": [
           { "name": "id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } }
         ],
@@ -2756,12 +2756,24 @@
             "application/json": {
               "schema": {
                 "type": "object",
-                "required": ["attempt_id", "option_id", "option_type"],
+                "required": ["attempt_id"],
                 "additionalProperties": false,
+                "oneOf": [
+                  {
+                    "required": ["option_id", "option_type"],
+                    "properties": { "timed_out": { "const": false } }
+                  },
+                  {
+                    "required": ["timed_out"],
+                    "properties": { "timed_out": { "const": true } },
+                    "not": { "anyOf": [{ "required": ["option_id"] }, { "required": ["option_type"] }] }
+                  }
+                ],
                 "properties": {
                   "attempt_id": { "type": "string", "format": "uuid" },
                   "option_id": { "type": "string", "format": "uuid" },
-                  "option_type": { "type": "string", "enum": ["artist", "album", "track"] }
+                  "option_type": { "type": "string", "enum": ["artist", "album", "track"] },
+                  "timed_out": { "type": "boolean" }
                 }
               }
             }
@@ -2774,10 +2786,11 @@
               "application/json": {
                 "schema": {
                   "type": "object",
-                  "required": ["text", "correct", "question"],
+                  "required": ["text", "correct", "timed_out", "question"],
                   "properties": {
                     "text": { "type": "string" },
                     "correct": { "type": "boolean" },
+                    "timed_out": { "type": "boolean" },
                     "question": { "$ref": "#/components/schemas/Question" }
                   }
                 }
@@ -5770,6 +5783,7 @@
           "status": { "$ref": "#/components/schemas/QuizStatus" },
           "clips_total": { "type": "integer", "minimum": 0 },
           "clips_ready": { "type": "integer", "minimum": 0 },
+          "questions_total": { "type": "integer", "minimum": 0, "description": "Количество вопросов всех типов в пакете" },
           "clip_error": { "type": "string", "description": "Причина остановки подготовки клипов" },
           "id": {
             "type": "string",

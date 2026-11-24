@@ -155,6 +155,7 @@ type QuizPack struct {
 	Status          string      `json:"status"`
 	ClipsTotal      int         `json:"clips_total"`
 	ClipsReady      int         `json:"clips_ready"`
+	QuestionsTotal  int         `json:"questions_total"`
 	ClipError       string      `json:"clip_error,omitempty"`
 	Rounds          []QuizRound `json:"rounds,omitempty" db:"-"`
 }
