@@ -4968,21 +4968,8 @@
     },
     "/api/v1/question-feedback": {
       "get": {
-        "summary": "Вопросы с числом жалоб и лайков; требуется право question-feedback",
+        "summary": "Очередь жалоб от новых к старым. Требуется право question-feedback",
         "parameters": [
-          {
-            "name": "filter",
-            "in": "query",
-            "schema": {
-              "type": "string",
-              "enum": [
-                "",
-                "reports",
-                "unread",
-                "likes"
-              ]
-            }
-          },
           {
             "name": "limit",
             "in": "query",
@@ -5005,7 +4992,102 @@
         ],
         "responses": {
           "200": {
-            "description": "Объект с items и total. Удалённые вопросы имеют deleted: true, текст «Вопрос был удалён» и пустой ответ."
+            "description": "Страница результатов",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "items": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/FeedbackReport"
+                      }
+                    },
+                    "total": {
+                      "type": "integer"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Некорректные параметры страницы"
+          },
+          "401": {
+            "description": "Требуется вход"
+          },
+          "403": {
+            "description": "Недостаточно прав"
+          }
+        }
+      }
+    },
+    "/api/v1/question-feedback/likes": {
+      "get": {
+        "summary": "Вопросы с лайками и количество лайков. Требуется право question-feedback",
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 200,
+              "default": 50
+            }
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "default": 0
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Страница результатов",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "items": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "id": {
+                            "type": "string",
+                            "format": "uuid",
+                            "description": "Идентификатор вопроса"
+                          },
+                          "likes": {
+                            "type": "integer"
+                          },
+                          "question": {
+                            "$ref": "#/components/schemas/FeedbackQuestion"
+                          }
+                        }
+                      }
+                    },
+                    "total": {
+                      "type": "integer"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Некорректные параметры страницы"
+          },
+          "401": {
+            "description": "Требуется вход"
           },
           "403": {
             "description": "Недостаточно прав"
@@ -5014,72 +5096,263 @@
       }
     },
     "/api/v1/question-feedback/{id}": {
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "description": "Идентификатор жалобы"
+        }
+      ],
       "get": {
-        "summary": "Жалобы на вопрос; id — идентификатор вопроса",
-        "parameters": [
-          {
-            "name": "id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "format": "uuid"
-            }
-          }
-        ],
+        "summary": "Жалоба и сохранённый контекст вопроса",
         "responses": {
           "200": {
-            "description": "Список жалоб"
-          },
-          "403": {
-            "description": "Недостаточно прав"
-          }
-        }
-      },
-      "patch": {
-        "summary": "Отметить жалобу просмотренной или непросмотренной; id — идентификатор жалобы",
-        "parameters": [
-          {
-            "name": "id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "format": "uuid"
-            }
-          }
-        ],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "type": "object",
-                "additionalProperties": false,
-                "properties": {
-                  "viewed": {
-                    "type": "boolean"
-                  }
-                },
-                "required": [
-                  "viewed"
-                ]
+            "description": "Карточка жалобы",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FeedbackReport"
+                }
               }
             }
-          }
-        },
-        "responses": {
-          "204": {
-            "description": "Отметка сохранена"
-          },
-          "400": {
-            "description": "Некорректный запрос"
           },
           "401": {
             "description": "Требуется вход"
           },
           "403": {
             "description": "Недостаточно прав"
+          },
+          "404": {
+            "description": "Жалоба или медиа недоступны"
+          }
+        }
+      },
+      "delete": {
+        "summary": "Удалить жалобу",
+        "responses": {
+          "204": {
+            "description": "Жалоба удалена"
+          },
+          "401": {
+            "description": "Требуется вход"
+          },
+          "403": {
+            "description": "Недостаточно прав"
+          },
+          "404": {
+            "description": "Жалоба или медиа недоступны"
+          }
+        }
+      }
+    },
+    "/api/v1/question-feedback/{id}/actions/{action}": {
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "description": "Идентификатор жалобы"
+        },
+        {
+          "name": "action",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string",
+            "enum": [
+              "delete-artist",
+              "delete-track",
+              "reject-cover",
+              "reset-artist",
+              "edit-artist-tags",
+              "add-track-coauthor",
+              "add-album-coauthor"
+            ]
+          }
+        }
+      ],
+      "post": {
+        "summary": "Изменить каталог и удалить жалобу в одной транзакции",
+        "description": "Требуется право question-feedback и право соответствующего раздела: artists для delete-artist, reset-artist и edit-artist-tags, tracks для delete-track и add-track-coauthor, albums для add-album-coauthor, album-guessing для reject-cover. Объект берётся из снимка жалобы.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "yt_music_url": {
+                    "type": "string",
+                    "format": "uri",
+                    "description": "Новая ссылка на страницу исполнителя для reset-artist"
+                  },
+                  "tags": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    },
+                    "description": "Новый список тегов из справочника для edit-artist-tags. Пустой список снимает все теги."
+                  },
+                  "artist_id": {
+                    "type": "string",
+                    "format": "uuid",
+                    "description": "Исполнитель из каталога для add-track-coauthor или add-album-coauthor"
+                  },
+                  "album_id": {
+                    "type": "string",
+                    "format": "uuid",
+                    "description": "Альбом из вопроса для add-album-coauthor"
+                  }
+                },
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "204": {
+            "description": "Каталог обновлён, жалоба удалена"
+          },
+          "400": {
+            "description": "Некорректные параметры или действие неприменимо к вопросу"
+          },
+          "401": {
+            "description": "Требуется вход"
+          },
+          "403": {
+            "description": "Недостаточно прав"
+          },
+          "404": {
+            "description": "Жалоба или медиа недоступны"
+          },
+          "409": {
+            "description": "Состояние каталога изменилось, жалоба сохранена"
+          }
+        }
+      }
+    },
+    "/api/v1/question-feedback/{id}/image": {
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "description": "Идентификатор жалобы"
+        }
+      ],
+      "get": {
+        "summary": "Изображение вопроса с сохранёнными масками, если они были",
+        "responses": {
+          "200": {
+            "description": "Файл из снимка жалобы",
+            "content": {
+              "image/*": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Требуется вход"
+          },
+          "403": {
+            "description": "Недостаточно прав"
+          },
+          "404": {
+            "description": "Жалоба или медиа недоступны"
+          }
+        }
+      }
+    },
+    "/api/v1/question-feedback/{id}/answer-image": {
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "description": "Идентификатор жалобы"
+        }
+      ],
+      "get": {
+        "summary": "Изображение карточки ответа",
+        "responses": {
+          "200": {
+            "description": "Файл из снимка жалобы",
+            "content": {
+              "image/*": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Требуется вход"
+          },
+          "403": {
+            "description": "Недостаточно прав"
+          },
+          "404": {
+            "description": "Жалоба или медиа недоступны"
+          }
+        }
+      }
+    },
+    "/api/v1/question-feedback/{id}/audio": {
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "description": "Идентификатор жалобы"
+        }
+      ],
+      "get": {
+        "summary": "Подготовленный фрагмент записи, который звучал в вопросе",
+        "responses": {
+          "200": {
+            "description": "Файл из снимка жалобы",
+            "content": {
+              "audio/mpeg": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Требуется вход"
+          },
+          "403": {
+            "description": "Недостаточно прав"
+          },
+          "404": {
+            "description": "Жалоба или медиа недоступны"
           }
         }
       }
@@ -5135,6 +5408,141 @@
   },
   "components": {
     "schemas": {
+      "FeedbackReport": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "question_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "user_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "user_name": {
+            "type": "string"
+          },
+          "type": {
+            "type": "string",
+            "enum": [
+              "question_error",
+              "bad_audio",
+              "bug"
+            ]
+          },
+          "comment": {
+            "type": "string"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "question_deleted": {
+            "type": "boolean"
+          },
+          "question": {
+            "$ref": "#/components/schemas/FeedbackQuestion"
+          }
+        }
+      },
+      "FeedbackQuestion": {
+        "type": "object",
+        "properties": {
+          "pack_name": {
+            "type": "string"
+          },
+          "number": {
+            "type": "integer"
+          },
+          "round_type": {
+            "type": "string"
+          },
+          "primary_text": {
+            "type": "string"
+          },
+          "secondary_text": {
+            "type": "string"
+          },
+          "answer": {
+            "type": "string"
+          },
+          "artist_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
+          "track_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
+          "artist_name": {
+            "type": "string"
+          },
+          "track_name": {
+            "type": "string"
+          },
+          "album_name": {
+            "type": "string"
+          },
+          "yt_music_url": {
+            "type": "string"
+          },
+          "albums": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                "name": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "coartists": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "release_date": {
+            "type": "string"
+          },
+          "track_start_sec": {
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "track_finish_sec": {
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "has_audio": {
+            "type": "boolean"
+          },
+          "has_image": {
+            "type": "boolean"
+          },
+          "has_answer_image": {
+            "type": "boolean"
+          }
+        }
+      },
       "Error": {
         "type": "object",
         "properties": {

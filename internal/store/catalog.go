@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -76,6 +77,12 @@ func (r ArtistRepository) Update(ctx context.Context, a domain.Artist) (domain.A
 	return r.Get(ctx, a.ID)
 }
 
+// SetTags сохраняет теги исполнителя из существующего справочника.
+func (r ArtistRepository) SetTags(ctx context.Context, id uuid.UUID, tags []string) error {
+	return execute(ctx, r.db, `UPDATE artists SET tags=$2,updated_at=now()
+		WHERE id=$1 AND $2::text[] <@ ARRAY(SELECT name FROM tags)`, []any{id, tags})
+}
+
 // Delete архивирует идентификатор исполнителя и очищает его каталог в транзакции.
 func (r ArtistRepository) Delete(ctx context.Context, id uuid.UUID) error {
 	if _, err := one[struct{ ID uuid.UUID }](ctx, r.db,
@@ -83,6 +90,14 @@ func (r ArtistRepository) Delete(ctx context.Context, id uuid.UUID) error {
 		return err
 	}
 
+	if err := r.clearCatalog(ctx, id); err != nil {
+		return err
+	}
+
+	return execute(ctx, r.db, "DELETE FROM artists WHERE id=$1", []any{id})
+}
+
+func (r ArtistRepository) clearCatalog(ctx context.Context, id uuid.UUID) error {
 	for _, sql := range []string{
 		`SELECT t.id FROM tracks t JOIN artist_to_track owner ON owner.track_id=t.id
             WHERE owner.artist_id=$1 ORDER BY t.id FOR UPDATE OF t`,
@@ -114,7 +129,41 @@ func (r ArtistRepository) Delete(ctx context.Context, id uuid.UUID) error {
 		}
 	}
 
-	return execute(ctx, r.db, "DELETE FROM artists WHERE id=$1", []any{id})
+	return nil
+}
+
+// ResetSource очищает прежние данные исполнителя и его связи перед новым импортом.
+func (r ArtistRepository) ResetSource(ctx context.Context, id uuid.UUID, ytMusicURL string) error {
+	err := execute(ctx, r.db, `UPDATE artists SET yt_music_url=$2,yt_music_id=NULL,genius_id=NULL,music_brainz_id='',
+		name=CASE WHEN name=yt_music_url THEN $2 ELSE name END,full_name='',country='',artists='{}',members_known=false,
+		logo_download_id=NULL,yt_plays=NULL,yt_subs=NULL,manual_fields='{}',asked=0,guessed=0,
+		status='created',provider_parsed=false,error='',lease_until=NULL,updated_at=now()
+		WHERE id=$1 AND status<>'processing'`, []any{id, ytMusicURL})
+	if errors.Is(err, domain.ErrNotFound) {
+		return fmt.Errorf("%w: исполнитель удалён или сейчас обрабатывается", domain.ErrConflict)
+	}
+
+	if err != nil {
+		return err
+	}
+
+	if err := r.clearCatalog(ctx, id); err != nil {
+		return err
+	}
+
+	for _, sql := range []string{
+		"DELETE FROM artist_provider_lists WHERE artist_id=$1",
+		"DELETE FROM artist_track_shortlists WHERE artist_id=$1",
+		"DELETE FROM artist_album_shortlists WHERE artist_id=$1",
+		"DELETE FROM legacy_catalog_popularity WHERE entity='artists' AND id=$1",
+		"UPDATE quiz_questions SET deleted=true WHERE artist_id=$1 AND NOT deleted",
+	} {
+		if _, err := r.db.Exec(ctx, sql, id); err != nil {
+			return translate(err)
+		}
+	}
+
+	return nil
 }
 
 // Retry возвращает исполнителя в очередь явного парсинга.
@@ -255,6 +304,13 @@ func (r AlbumRepository) SetCover(ctx context.Context, id, downloadID uuid.UUID)
 	return execute(ctx, r.db, "UPDATE albums SET cover_download_id=$2,updated_at=now() WHERE id=$1", []any{id, downloadID})
 }
 
+// AddCoartist связывает альбом с дополнительным исполнителем из каталога.
+func (r AlbumRepository) AddCoartist(ctx context.Context, id, artistID uuid.UUID) error {
+	_, err := r.db.Exec(ctx, `INSERT INTO artist_to_album(album_id,artist_id,is_primary)
+		VALUES ($1,$2,false) ON CONFLICT (album_id,artist_id) DO NOTHING`, id, artistID)
+	return translate(err)
+}
+
 // Import находит альбом по ID источника во всём каталоге или по имени у исполнителя.
 func (r AlbumRepository) Import(ctx context.Context, a domain.Album) (domain.Album, error) {
 	return r.importAlbum(ctx, a, false)
@@ -290,9 +346,9 @@ func (r AlbumRepository) importAlbum(ctx context.Context, a domain.Album, fill b
 	if id == uuid.Nil {
 		return r.Create(ctx, a)
 	}
-	if _, err := r.db.Exec(ctx, `INSERT INTO artist_to_album(album_id,artist_id,is_primary) VALUES ($1,$2,false)
-        ON CONFLICT (album_id,artist_id) DO NOTHING`, id, a.ArtistID); err != nil {
-		return a, translate(err)
+
+	if err := r.AddCoartist(ctx, id, a.ArtistID); err != nil {
+		return a, err
 	}
 	if fill {
 		err := execute(ctx, r.db, `UPDATE albums SET
@@ -490,10 +546,8 @@ func (r TrackRepository) importTrack(ctx context.Context, t domain.Track, fallba
 	}
 
 	if previous.ArtistID != t.ArtistID {
-		_, err := r.db.Exec(ctx, `INSERT INTO artist_to_track(track_id,artist_id,is_primary) VALUES ($1,$2,false)
-            ON CONFLICT (track_id,artist_id) DO NOTHING`, id, t.ArtistID)
-		if err != nil {
-			return t, previous, translate(err)
+		if err := r.AddCoartist(ctx, id, t.ArtistID); err != nil {
+			return t, previous, err
 		}
 	}
 
@@ -505,6 +559,13 @@ func (r TrackRepository) importTrack(ctx context.Context, t domain.Track, fallba
 // Delete архивирует идентификатор трека и очищает его данные.
 func (r TrackRepository) Delete(ctx context.Context, id uuid.UUID) error {
 	return execute(ctx, r.db, "DELETE FROM tracks WHERE id=$1", []any{id})
+}
+
+// AddCoartist связывает трек с дополнительным исполнителем из каталога.
+func (r TrackRepository) AddCoartist(ctx context.Context, id, artistID uuid.UUID) error {
+	_, err := r.db.Exec(ctx, `INSERT INTO artist_to_track(track_id,artist_id,is_primary)
+		VALUES ($1,$2,false) ON CONFLICT (track_id,artist_id) DO NOTHING`, id, artistID)
+	return translate(err)
 }
 
 func sameID[T comparable](a, b *T) bool {

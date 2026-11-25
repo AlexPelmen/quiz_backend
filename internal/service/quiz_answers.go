@@ -122,5 +122,5 @@ func matchesAnswer(q store.PlayableQuestion, f AnswerForm) bool {
 		return f.OptionType == "track" && q.TrackID != nil && (f.OptionID == *q.TrackID || q.OptionNearAnswer)
 	}
 
-	return f.OptionType == "artist" && (f.OptionID == q.ArtistID || q.OptionNearAnswer)
+	return f.OptionType == "artist" && (f.OptionID == q.ArtistID || q.OptionCoartist || q.OptionNearAnswer)
 }

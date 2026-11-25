@@ -11,66 +11,122 @@ import (
 	"devkeeper.com/quiz/internal/domain"
 )
 
-// FeedbackQuestion описывает вопрос и итоговые показатели обратной связи.
+// FeedbackQuestion содержит снимок вопроса на момент отправки жалобы.
 type FeedbackQuestion struct {
-	ID              uuid.UUID  `json:"id"`
-	PackID          uuid.UUID  `json:"pack_id"`
-	PackName        string     `json:"pack_name"`
-	Number          int        `json:"number"`
-	RoundType       string     `json:"round_type"`
-	Deleted         bool       `json:"deleted"`
-	PrimaryText     string     `json:"primary_text"`
-	Answer          string     `json:"answer"`
-	HasAudio        bool       `json:"has_audio"`
-	ImageDownloadID *uuid.UUID `json:"image_download_id"`
-	Reports         int64      `json:"reports"`
-	Unread          int64      `json:"unread"`
-	Likes           int64      `json:"likes"`
+	PackName       string          `json:"pack_name"`
+	Number         int             `json:"number"`
+	RoundType      string          `json:"round_type"`
+	PrimaryText    string          `json:"primary_text"`
+	SecondaryText  string          `json:"secondary_text"`
+	Answer         string          `json:"answer"`
+	ArtistID       *uuid.UUID      `json:"artist_id"`
+	TrackID        *uuid.UUID      `json:"track_id"`
+	ArtistName     string          `json:"artist_name"`
+	TrackName      string          `json:"track_name"`
+	AlbumName      string          `json:"album_name"`
+	YTMusicURL     string          `json:"yt_music_url"`
+	Albums         []FeedbackAlbum `json:"albums"`
+	Coartists      []string        `json:"coartists"`
+	ReleaseDate    string          `json:"release_date"`
+	TrackStartSec  *float64        `json:"track_start_sec"`
+	TrackFinishSec *float64        `json:"track_finish_sec"`
+	HasAudio       bool            `json:"has_audio"`
+	HasImage       bool            `json:"has_image"`
+	HasAnswerImage bool            `json:"has_answer_image"`
 }
 
-// FeedbackEntry описывает жалобу на вопрос.
-type FeedbackEntry struct {
-	ID         uuid.UUID `json:"id"`
-	QuestionID uuid.UUID `json:"question_id"`
-	UserID     uuid.UUID `json:"user_id"`
-	UserName   string    `json:"user_name"`
-	Type       string    `json:"type"`
-	Comment    string    `json:"comment"`
-	Viewed     bool      `json:"viewed"`
-	CreatedAt  time.Time `json:"created_at"`
-	UpdatedAt  time.Time `json:"updated_at"`
+// FeedbackAlbum указывает на альбом, который был показан в вопросе.
+type FeedbackAlbum struct {
+	ID   uuid.UUID `json:"id"`
+	Name string    `json:"name"`
 }
 
-const feedbackQuestionsFrom = `FROM quiz_questions q JOIN quiz_rounds r ON r.id=q.round_id JOIN quiz_packs p ON p.id=r.pack_id
- LEFT JOIN LATERAL (SELECT count(*) FILTER (WHERE type<>'like') AS reports,
- count(*) FILTER (WHERE type<>'like' AND NOT viewed) AS unread,
- count(*) FILTER (WHERE type='like') AS likes FROM question_feedback WHERE question_id=q.id) f ON true
- WHERE ($1='' OR ($1='reports' AND f.reports>0) OR ($1='unread' AND f.unread>0) OR ($1='likes' AND f.likes>0))`
+// FeedbackReport описывает жалобу и связанный с ней вопрос.
+type FeedbackReport struct {
+	ID              uuid.UUID        `json:"id"`
+	QuestionID      uuid.UUID        `json:"question_id"`
+	UserID          uuid.UUID        `json:"user_id"`
+	UserName        string           `json:"user_name"`
+	Type            string           `json:"type"`
+	Comment         string           `json:"comment"`
+	CreatedAt       time.Time        `json:"created_at"`
+	QuestionDeleted bool             `json:"question_deleted"`
+	Question        FeedbackQuestion `json:"question"`
+}
 
-// FeedbackQuestions возвращает страницу вопросов и их общее число с фильтром.
-func (u *UnitOfWork) FeedbackQuestions(ctx context.Context, filter string, limit, offset int) ([]FeedbackQuestion, int64, error) {
+// FeedbackLike описывает понравившийся вопрос и количество лайков.
+type FeedbackLike struct {
+	ID       uuid.UUID        `json:"id"`
+	Likes    int64            `json:"likes"`
+	Question FeedbackQuestion `json:"question"`
+}
+
+const reportSelect = `SELECT f.id,f.question_id,f.user_id,u.name AS user_name,f.type,f.comment,f.created_at,
+ q.deleted AS question_deleted,f.snapshot AS question
+ FROM question_feedback f JOIN users u ON u.id=f.user_id JOIN quiz_questions q ON q.id=f.question_id
+ WHERE f.type<>'like'`
+
+// FeedbackReports возвращает страницу отдельных жалоб в порядке поступления.
+func (u *UnitOfWork) FeedbackReports(ctx context.Context, p domain.Page) ([]FeedbackReport, int64, error) {
 	var total int64
-	if err := u.db.QueryRow(ctx, `SELECT count(*) `+feedbackQuestionsFrom, filter).Scan(&total); err != nil {
+	if err := u.db.QueryRow(ctx, `SELECT count(*) FROM question_feedback WHERE type<>'like'`).Scan(&total); err != nil {
 		return nil, 0, err
 	}
 
-	rows, err := query[FeedbackQuestion](ctx, u.db, `SELECT q.id,p.id AS pack_id,p.name AS pack_name,q.number,
- r.type AS round_type,q.deleted,q.primary_text,q.answer,(q.sound_download_id IS NOT NULL) AS has_audio,
- q.image_download_id,f.reports,f.unread,f.likes `+feedbackQuestionsFrom+`
- ORDER BY q.created_at DESC,q.id DESC LIMIT $2 OFFSET $3`, []any{filter, limit, offset})
+	rows, err := query[FeedbackReport](ctx, u.db, reportSelect+
+		` ORDER BY f.created_at DESC,f.id DESC LIMIT $1 OFFSET $2`, []any{p.Limit, p.Offset})
+
 	return rows, total, err
 }
 
-// QuestionReports возвращает жалобы и имена их авторов.
-func (u *UnitOfWork) QuestionReports(ctx context.Context, id uuid.UUID) ([]FeedbackEntry, error) {
-	return query[FeedbackEntry](ctx, u.db, `SELECT f.id,f.question_id,f.user_id,u.name AS user_name,f.type,f.comment,f.viewed,f.created_at,f.updated_at
- FROM question_feedback f JOIN users u ON u.id=f.user_id WHERE f.question_id=$1 AND f.type<>'like' ORDER BY f.created_at DESC,f.id DESC`, []any{id})
+// FeedbackLikes возвращает только вопросы, на которые поставили лайки.
+func (u *UnitOfWork) FeedbackLikes(ctx context.Context, p domain.Page) ([]FeedbackLike, int64, error) {
+	var total int64
+
+	err := u.db.QueryRow(ctx, `SELECT count(DISTINCT question_id) FROM question_feedback WHERE type='like'`).Scan(&total)
+	if err != nil {
+		return nil, 0, err
+	}
+
+	rows, err := query[FeedbackLike](ctx, u.db, `SELECT f.question_id AS id,f.likes,to_jsonb(q) AS question FROM (
+		SELECT question_id,count(*) AS likes,max(created_at) AS latest FROM question_feedback WHERE type='like'
+		GROUP BY question_id ORDER BY latest DESC,question_id LIMIT $1 OFFSET $2
+	) f JOIN question_feedback_context q ON q.question_id=f.question_id ORDER BY f.latest DESC,f.question_id`,
+		[]any{p.Limit, p.Offset})
+	return rows, total, err
+}
+
+// FeedbackReport возвращает жалобу, при обработке блокируя её от повторного действия.
+func (u *UnitOfWork) FeedbackReport(ctx context.Context, id uuid.UUID, lock bool) (FeedbackReport, error) {
+	sql := reportSelect + " AND f.id=$1"
+	if lock {
+		sql += " FOR UPDATE OF f"
+	}
+
+	return one[FeedbackReport](ctx, u.db, sql, []any{id})
+}
+
+// FeedbackMedia содержит ссылки на сохранённые медиа вопроса и карточки ответа.
+type FeedbackMedia struct {
+	ImageDownloadID       *uuid.UUID
+	AnswerImageDownloadID *uuid.UUID
+	CoverRectangles       []domain.CoverRectangle
+	ClipName              string
+}
+
+// FeedbackMedia возвращает медиаданные только снимка указанной жалобы.
+func (u *UnitOfWork) FeedbackMedia(ctx context.Context, id uuid.UUID) (FeedbackMedia, error) {
+	return one[FeedbackMedia](ctx, u.db, `SELECT (snapshot->>'image_download_id')::uuid AS image_download_id,
+	    (snapshot->>'answer_image_download_id')::uuid AS answer_image_download_id,
+	    snapshot->'cover_rectangles' AS cover_rectangles,snapshot->>'clip_name' AS clip_name
+	    FROM question_feedback WHERE id=$1 AND type<>'like'`, []any{id})
 }
 
 // AddQuestionReport сохраняет жалобу для существующего вопроса.
 func (u *UnitOfWork) AddQuestionReport(ctx context.Context, question, user uuid.UUID, kind, comment string) error {
-	return execute(ctx, u.db, `INSERT INTO question_feedback(id,question_id,user_id,type,comment)
- SELECT $1,id,$3,$4,$5 FROM quiz_questions WHERE id=$2 AND NOT deleted`,
+	return execute(ctx, u.db, `INSERT INTO question_feedback(id,question_id,user_id,type,comment,snapshot)
+		SELECT $1,q.question_id,$3,$4,$5,to_jsonb(q) FROM question_feedback_context q
+		WHERE q.question_id=$2 AND NOT q.deleted`,
 		[]any{uuid.New(), question, user, kind, comment})
 }
 
@@ -104,7 +160,7 @@ func (u *UnitOfWork) SetQuestionLike(ctx context.Context, question, user uuid.UU
 	return translate(err)
 }
 
-// SetReportViewed меняет отметку просмотра жалобы.
-func (u *UnitOfWork) SetReportViewed(ctx context.Context, id uuid.UUID, viewed bool) error {
-	return execute(ctx, u.db, `UPDATE question_feedback SET viewed=$2,updated_at=now() WHERE id=$1 AND type<>'like'`, []any{id, viewed})
+// DeleteReport удаляет обработанную жалобу.
+func (u *UnitOfWork) DeleteReport(ctx context.Context, id uuid.UUID) error {
+	return execute(ctx, u.db, `DELETE FROM question_feedback WHERE id=$1 AND type<>'like'`, []any{id})
 }

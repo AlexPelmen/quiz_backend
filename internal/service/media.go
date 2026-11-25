@@ -406,8 +406,12 @@ func (a *App) Audio(ctx context.Context, packID uuid.UUID, number int, readyOnly
 		return "", domain.ErrNotFound
 	}
 
+	return a.clipPath(ctx, q.ClipName)
+}
+
+func (a *App) clipPath(ctx context.Context, name string) (string, error) {
 	if a.objects != nil {
-		return a.objects.URI("music/clips/" + q.ClipName), nil
+		return a.objects.URI("music/clips/" + name), nil
 	}
 
 	s, err := a.Settings(ctx)
@@ -415,7 +419,7 @@ func (a *App) Audio(ctx context.Context, packID uuid.UUID, number int, readyOnly
 		return "", err
 	}
 
-	return filepath.Join(s.StorageDir, "music", "clips", q.ClipName), nil
+	return filepath.Join(s.StorageDir, "music", "clips", name), nil
 }
 
 func (a *App) prepareClip(ctx context.Context, s domain.Settings, q domain.Question) (string, error) {

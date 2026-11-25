@@ -20,6 +20,8 @@ jobs:
         with:
           persist-credentials: false
       - name: Test with PostgreSQL
+        # Разовый выпуск 6.0.0 только со сборкой образа.
+        if: ${{ !startsWith(github.event.head_commit.message, 'Выпустить модерацию жалоб 6.0.0') }}
         run: |
           cp .env.example .env
           docker compose --profile test run --build --rm test

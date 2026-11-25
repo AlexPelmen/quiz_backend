@@ -217,6 +217,22 @@ func requiredSection(method, path string) string {
 }
 
 func allowedSection(u User, section string, r *http.Request) bool {
+	path := strings.TrimPrefix(r.URL.Path, "/api/v1/")
+	if section == "question-feedback" && r.Method == "POST" {
+		parts := strings.Split(path, "/")
+		if len(parts) == 4 && parts[2] == "actions" {
+			required := map[string]string{
+				"delete-artist": "artists", "reset-artist": "artists",
+				"edit-artist-tags": "artists",
+				"delete-track":     "tracks", "add-track-coauthor": "tracks",
+				"add-album-coauthor": "albums", "reject-cover": "album-guessing",
+			}[parts[3]]
+			if required != "" {
+				return u.Can(section) && u.Can(required)
+			}
+		}
+	}
+
 	if u.Can(section) {
 		return true
 	}
@@ -225,7 +241,6 @@ func allowedSection(u User, section string, r *http.Request) bool {
 		return false
 	}
 
-	path := strings.TrimPrefix(r.URL.Path, "/api/v1/")
 	if section == "parsing" && strings.HasPrefix(path, "parsing-runs") && u.Can("parsing-logs") {
 		return true
 	}

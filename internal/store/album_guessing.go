@@ -54,6 +54,24 @@ func (r AlbumRepository) SaveGuessing(ctx context.Context, albumID uuid.UUID, d 
 		[]any{albumID, d.CoverID, d.Approved, d.Rectangles})
 }
 
+// RejectQuestionCover запрещает показ указанной версии обложки и снимает вопросы с ней.
+func (r AlbumRepository) RejectQuestionCover(ctx context.Context, albumID, coverID uuid.UUID) error {
+	if err := execute(ctx, r.db, `UPDATE albums SET updated_at=now() WHERE id=$1 AND cover_download_id=$2`,
+		[]any{albumID, coverID}); err != nil {
+		return err
+	}
+
+	if err := execute(ctx, r.db, `UPDATE album_guessing SET approved=false
+		WHERE album_id=$1 AND cover_download_id=$2`, []any{albumID, coverID}); err != nil {
+		return err
+	}
+
+	_, err := r.db.Exec(ctx, `UPDATE quiz_questions q SET deleted=true FROM quiz_rounds r
+	    WHERE r.id=q.round_id AND r.type='artist_by_cover' AND q.album_id=$1 AND NOT q.deleted`, albumID)
+
+	return translate(err)
+}
+
 type guessingImage struct {
 	CoverDownloadID uuid.UUID
 	Rectangles      []domain.CoverRectangle

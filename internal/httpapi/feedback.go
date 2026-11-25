@@ -63,40 +63,110 @@ func (a *api) questionLike(c *gin.Context) {
 	c.Status(http.StatusNoContent)
 }
 
-func (a *api) feedbackQuestions(c *gin.Context) {
+func (a *api) feedbackReports(c *gin.Context) {
 	p, err := page(c)
 	if err != nil {
 		a.respond(c, nil, err)
 		return
 	}
-	rows, total, err := a.app.FeedbackQuestions(c.Request.Context(), c.Query("filter"), p)
+
+	rows, total, err := a.app.FeedbackReports(c.Request.Context(), p)
 	a.respond(c, gin.H{"items": rows, "total": total}, err)
 }
-func (a *api) questionReports(c *gin.Context) {
-	id, err := requestID(c)
+
+func (a *api) feedbackLikes(c *gin.Context) {
+	p, err := page(c)
 	if err != nil {
 		a.respond(c, nil, err)
 		return
 	}
-	rows, err := a.app.QuestionReports(c.Request.Context(), *id)
-	a.respond(c, rows, err)
+
+	rows, total, err := a.app.FeedbackLikes(c.Request.Context(), p)
+	a.respond(c, gin.H{"items": rows, "total": total}, err)
 }
-func (a *api) viewFeedback(c *gin.Context) {
+
+func (a *api) feedbackReport(c *gin.Context) {
 	id, err := requestID(c)
 	if err != nil {
 		a.respond(c, nil, err)
 		return
 	}
-	var form struct {
-		Viewed *bool `json:"viewed"`
-	}
-	if err = decode(c, &form); err != nil || form.Viewed == nil {
-		a.respond(c, nil, domain.ErrInvalid)
-		return
-	}
-	if err = a.app.SetReportViewed(c.Request.Context(), *id, *form.Viewed); err != nil {
+
+	report, err := a.app.FeedbackReport(c.Request.Context(), *id)
+	a.respond(c, report, err)
+}
+
+func (a *api) deleteFeedbackReport(c *gin.Context) {
+	id, err := requestID(c)
+	if err != nil {
 		a.respond(c, nil, err)
 		return
 	}
+
+	if err = a.app.DeleteReport(c.Request.Context(), *id); err != nil {
+		a.respond(c, nil, err)
+		return
+	}
+
 	c.Status(http.StatusNoContent)
+}
+
+func (a *api) resolveFeedbackReport(c *gin.Context) {
+	id, err := requestID(c)
+	if err != nil {
+		a.respond(c, nil, err)
+		return
+	}
+
+	var form service.ReportActionForm
+	if err = decode(c, &form); err != nil {
+		a.respond(c, nil, err)
+		return
+	}
+
+	form.Action = c.Param("action")
+
+	if err := a.app.ResolveReport(c.Request.Context(), *id, form); err != nil {
+		a.respond(c, nil, err)
+		return
+	}
+
+	c.Status(http.StatusNoContent)
+}
+
+func (a *api) feedbackImage(answer bool) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		id, err := requestID(c)
+		if err != nil {
+			a.respond(c, nil, err)
+			return
+		}
+
+		path, data, err := a.app.ReportImage(c.Request.Context(), *id, answer)
+		if data != nil {
+			a.coverResponse(c, data, err)
+			return
+		}
+
+		c.Header("Cache-Control", "no-store")
+		a.serveFile(c, path, err)
+	}
+}
+
+func (a *api) feedbackAudio(c *gin.Context) {
+	id, err := requestID(c)
+	if err != nil {
+		a.respond(c, nil, err)
+		return
+	}
+
+	c.Header("Cache-Control", "no-store")
+
+	path, err := a.app.ReportAudio(c.Request.Context(), *id)
+	if err == nil {
+		c.Header("Content-Type", "audio/mpeg")
+		c.Header("Content-Disposition", "inline")
+	}
+
+	a.serveFile(c, path, err)
 }

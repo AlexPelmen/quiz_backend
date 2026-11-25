@@ -84,6 +84,7 @@ type PlayableQuestion struct {
 	RoundType        string
 	OptionName       *string
 	OptionNearAnswer bool
+	OptionCoartist   bool
 }
 
 // PlayableQuestion возвращает вопрос готового пакета и проверяет выбранную запись в том же запросе.
@@ -94,7 +95,22 @@ func (r PackRepository) PlayableQuestion(
 		CASE WHEN regexp_count(q.answer,'[[:alpha:]]')>5 AND regexp_count(option.name,'[[:alpha:]]')>5
 			THEN quiz_answer_within_one_edit(quiz_answer_search_key(q.answer),quiz_answer_search_key(option.name))
 			ELSE false
-		END AS option_near_answer
+		END AS option_near_answer,
+		CASE WHEN $2<>'artist' THEN false
+			WHEN q.track_id IS NOT NULL THEN EXISTS (
+				SELECT 1 FROM artist_to_track owner WHERE owner.track_id=q.track_id AND owner.artist_id=$3
+			)
+			WHEN q.album_id IS NOT NULL THEN EXISTS (
+				SELECT 1 FROM artist_to_album owner WHERE owner.album_id=q.album_id AND owner.artist_id=$3
+			)
+			WHEN r.type='artist_by_albums' THEN (
+				SELECT count(owner.artist_id)>0
+					AND count(owner.artist_id)=cardinality(string_to_array(q.secondary_text,E'\n'))
+				FROM quiz_question_album_refs ar JOIN artist_to_album owner ON owner.album_id=ar.album_id
+				WHERE ar.question_id=q.id AND owner.artist_id=$3
+			)
+			ELSE false
+		END AS option_coartist
 		FROM quiz_questions q JOIN quiz_rounds r ON r.id=q.round_id JOIN quiz_pack_status p ON p.id=r.pack_id
 		LEFT JOIN (
 			SELECT name FROM artists WHERE $2='artist' AND id=$3

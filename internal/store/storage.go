@@ -177,12 +177,18 @@ func (r DownloadRepository) StorageReferences(ctx context.Context) ([]StoredRefe
         OR EXISTS(SELECT 1 FROM albums a WHERE a.cover_download_id=d.id)
         OR EXISTS(SELECT 1 FROM quiz_packs p WHERE p.cover_download_id=d.id)
         OR EXISTS(SELECT 1 FROM quiz_questions q WHERE q.image_download_id=d.id OR q.sound_download_id=d.id)
+        OR COALESCE(d.id IN (SELECT (snapshot->>'image_download_id')::uuid FROM question_feedback WHERE type<>'like'
+            UNION ALL SELECT (snapshot->>'answer_image_download_id')::uuid
+            FROM question_feedback WHERE type<>'like'),false)
         OR EXISTS(SELECT 1 FROM album_guessing g WHERE g.cover_download_id=d.id) AS used
         FROM downloads d WHERE d.uri<>''`, nil)
 	if err != nil {
 		return nil, nil, err
 	}
-	questions, err := query[struct{ ID uuid.UUID }](ctx, r.db, `SELECT id FROM quiz_questions WHERE sound_download_id IS NOT NULL`, nil)
+
+	questions, err := query[struct{ ID uuid.UUID }](ctx, r.db, `
+	    SELECT id FROM quiz_questions WHERE sound_download_id IS NOT NULL
+	    UNION SELECT question_id FROM question_feedback WHERE type<>'like' AND snapshot->>'clip_name'<>''`, nil)
 	if err != nil {
 		return nil, nil, err
 	}

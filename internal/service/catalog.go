@@ -174,9 +174,8 @@ func (a *App) SaveArtist(ctx context.Context, id *uuid.UUID, f ArtistForm) (doma
 
 		applyArtist(&r, f)
 		if f.YTMusicURL != nil && r.YTMusicURL != "" {
-			u, err := url.Parse(r.YTMusicURL)
-			if err != nil || u.Scheme != "https" || u.Host != "music.youtube.com" || u.User != nil || u.RawQuery != "" || u.Fragment != "" || !regexp.MustCompile(`^/(@[\pL\pN_.-]+|channel/UC[A-Za-z0-9_-]{22})/?$`).MatchString(u.Path) {
-				return fmt.Errorf("%w: укажите ссылку на страницу исполнителя music.youtube.com", domain.ErrInvalid)
+			if err := validateYTArtistURL(r.YTMusicURL); err != nil {
+				return err
 			}
 		}
 
@@ -211,6 +210,18 @@ func (a *App) SaveArtist(ctx context.Context, id *uuid.UUID, f ArtistForm) (doma
 	})
 
 	return result, err
+}
+
+var ytArtistPath = regexp.MustCompile(`^/(@[\pL\pN_.-]+|channel/UC[A-Za-z0-9_-]{22})/?$`)
+
+func validateYTArtistURL(raw string) error {
+	u, err := url.Parse(raw)
+	if err != nil || u.Scheme != "https" || u.Host != "music.youtube.com" || u.User != nil ||
+		u.RawQuery != "" || u.Fragment != "" || !ytArtistPath.MatchString(u.Path) {
+		return fmt.Errorf("%w: укажите ссылку на страницу исполнителя music.youtube.com", domain.ErrInvalid)
+	}
+
+	return nil
 }
 
 func applyArtist(r *domain.Artist, f ArtistForm) {
